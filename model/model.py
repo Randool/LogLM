@@ -6,16 +6,78 @@
 @Version     :  1.0
 @Description :  Bert with variable length of `[CLS]`
 """
-from typing import Optional, Tuple
+import copy
+from typing import Optional, Tuple, Union
 
 import torch
 from dataclasses import dataclass
 from torch import nn
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
-from transformers import BertConfig, BertModel, BertPreTrainedModel
+from transformers import BertModel, BertPreTrainedModel, BertConfig
 from transformers.file_utils import ModelOutput
 from transformers.modeling_outputs import SequenceClassifierOutput
-from transformers.models.bert.modeling_bert import BertLMPredictionHead
+from transformers.models.bert.modeling_bert import BertLMPredictionHead, BertEncoder
+
+
+class LogLMConfig(BertConfig):
+    model_type = "bert"
+
+    def __init__(
+            self,
+            vocab_size=30522,
+            hidden_size=768,
+            num_hidden_layers=12,
+            num_attention_heads=12,
+            intermediate_size=3072,
+            hidden_act="gelu",
+            hidden_dropout_prob=0.1,
+            attention_probs_dropout_prob=0.1,
+            max_position_embeddings=512,
+            type_vocab_size=2,
+            initializer_range=0.02,
+            layer_norm_eps=1e-12,
+            pad_token_id=0,
+            position_embedding_type="absolute",
+            use_cache=True,
+            classifier_dropout=None,
+            shared_non_casual_decoder=False,
+            num_non_casual_decoder_layers=3,
+            num_casual_decoder_layers=3,
+            **kwargs
+    ):
+        super().__init__(
+            vocab_size=vocab_size,
+            hidden_size=hidden_size,
+            num_hidden_layers=num_hidden_layers,
+            num_attention_heads=num_attention_heads,
+            intermediate_size=intermediate_size,
+            hidden_act=hidden_act,
+            hidden_dropout_prob=hidden_dropout_prob,
+            attention_probs_dropout_prob=attention_probs_dropout_prob,
+            max_position_embeddings=max_position_embeddings,
+            type_vocab_size=type_vocab_size,
+            initializer_range=initializer_range,
+            layer_norm_eps=layer_norm_eps,
+            pad_token_id=pad_token_id,
+            position_embedding_type=position_embedding_type,
+            use_cache=use_cache,
+            classifier_dropout=classifier_dropout,
+            **kwargs
+        )
+
+        self.shared_non_casual_decoder = shared_non_casual_decoder
+        self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
+        self.num_casual_decoder_layers = num_casual_decoder_layers
+
+    def for_non_casual_decoder(self):
+        config = copy.deepcopy(self)
+        config.num_hidden_layers = config.num_non_casual_decoder_layers
+        return config
+
+    def for_casual_decoder(self):
+        config = copy.deepcopy(self)
+        config.num_hidden_layers = config.num_casual_decoder_layers
+        return config
 
 
 @dataclass
@@ -28,17 +90,70 @@ class LogLMForPreTrainingOutput(ModelOutput):
 
 
 class LogLMPreTrainedModel(BertPreTrainedModel):
-    pass
+    def resize_position_embeddings(self, new_num_position_embeddings: int):
+        pass
+
+    def get_position_embeddings(self) -> Union[nn.Embedding, Tuple[nn.Embedding]]:
+        pass
+
+    def _reorder_cache(self, past, beam_idx):
+        pass
+
+
+class NonCausalDecoder(nn.Module):
+    def __init__(self, config: LogLMConfig):
+        super().__init__()
+        self.config = config.for_non_casual_decoder()
+        self.decoder = BertEncoder(self.config)
+        self.lm_predictions = BertLMPredictionHead(self.config)
+
+    def forward(self, hidden_states, attention_mask, head_mask=None, labels=None):
+        batch_size, seq_length, _ = hidden_states.shape
+
+        if attention_mask is None:
+            attention_mask = torch.ones((batch_size, seq_length), device=hidden_states.device)
+
+        extended_attention_mask = attention_mask[:, None, None, :].to(dtype=hidden_states.dtype)
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+
+        outputs = self.decoder(
+            hidden_states=hidden_states,
+            attention_mask=extended_attention_mask,
+            head_mask=head_mask,
+            output_attentions=False,
+            output_hidden_states=False
+        )
+        logits = self.lm_predictions(outputs.last_hidden_state)
+        loss = None
+
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+
+        return loss, logits
+
+
+class CausalDecoder(nn.Module):
+    def __init__(self, config: LogLMConfig):
+        super().__init__()
+        self.config = config.for_casual_decoder()
+        # TODO: Implement
+
+    def forward(self):
+        pass
 
 
 class LogLMForPreTraining(LogLMPreTrainedModel):
-    def __init__(self, config: BertConfig):
+    def __init__(self, config: LogLMConfig):
         super().__init__(config)
         self.config = config
 
         self.bert = BertModel(config, add_pooling_layer=False)
-
         self.prompt_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
+
+        self.non_casual_decoder = NonCausalDecoder(config)
+        self.casual_decoder = CausalDecoder(config)
+
         self.lm_predictions = BertLMPredictionHead(config)
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
@@ -50,54 +165,6 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
 
     def set_output_embeddings(self, new_embeddings):
         self.lm_predictions.decoder = new_embeddings
-
-    def _forward(
-            self,
-            inputs_embeds,
-            prompt_type_ids=None,
-            attention_mask=None,
-            token_type_ids=None,
-            position_ids=None,
-            head_mask=None,
-            labels=None,
-            next_sentence_label=None,
-            output_attentions=None,
-            output_hidden_states=None,
-            return_dict=None,
-    ):
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        cal_mlm_loss = (labels is not None)
-        cal_nsp_loss = (next_sentence_label is not None)
-
-        outputs = self.bert(
-            input_ids=None,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        loss = None
-        prediction_logits = None
-        seq_relationship_logits = None
-        loss_fct = CrossEntropyLoss() if cal_mlm_loss or cal_nsp_loss else None
-
-        if cal_mlm_loss:
-            prediction_logits = self.lm_predictions(outputs.last_hidden_state)
-            masked_lm_loss = loss_fct(prediction_logits.view(-1, self.config.vocab_size), labels.view(-1))
-            loss = masked_lm_loss
-
-        if cal_nsp_loss:
-            prompt_hiddens = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
-            seq_relationship_logits = self.seq_relationship(prompt_hiddens)
-            next_sentence_loss = loss_fct(seq_relationship_logits.view(-1, 2), next_sentence_label.view(-1))
-            loss = next_sentence_loss if (loss is None) else loss + next_sentence_loss
-
-        return loss, prediction_logits, seq_relationship_logits, outputs
 
     def forward(
             self,
@@ -113,34 +180,46 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
-            mask_token_id=103,
+            mask_token_id=None
     ):
+        assert mask_token_id is not None, f"Require `mask_token_id`"
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if inputs_embeds is None:
-            inputs_embeds = self.bert.embeddings.forward(input_ids, token_type_ids, position_ids)
+        cal_mlm_loss = (labels is not None)
+        cal_nsp_loss = (next_sentence_label is not None)
 
         if (labels is not None) and (prompt_type_ids is None):
             prompt_type_ids = (1 <= input_ids) & (input_ids <= 11)
             prompt_type_ids[:, 0] = True
 
         # First pass: nsp_loss + mlm_loss
-        loss, prediction_logits, seq_relationship_logits, outputs = self._forward(
-            inputs_embeds=inputs_embeds,
-            prompt_type_ids=prompt_type_ids,
+        outputs = self.bert(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
             head_mask=head_mask,
-            labels=labels,
-            next_sentence_label=next_sentence_label,
+            inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
+        loss = prediction_logits = seq_relationship_logits = None
+        loss_fct = CrossEntropyLoss() if cal_mlm_loss or cal_nsp_loss else None
+
+        if cal_mlm_loss:
+            prediction_logits = self.lm_predictions(outputs.last_hidden_state)
+            masked_lm_loss = loss_fct(prediction_logits.view(-1, self.config.vocab_size), labels.view(-1))
+            loss = masked_lm_loss
+
+        if cal_nsp_loss:
+            prompt_hiddens = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
+            seq_relationship_logits = self.seq_relationship(prompt_hiddens)
+            next_sentence_loss = loss_fct(seq_relationship_logits.view(-1, 2), next_sentence_label.view(-1))
+            loss = next_sentence_loss if (loss is None) else loss + next_sentence_loss
+
         # Second pass: mlm_loss
-        if labels is not None:
+        if cal_mlm_loss:
             real_token_mask = prompt_type_ids ^ attention_mask.bool()  # F, F, T, T, ..., T[, F, F]
             dummy_input_ids = torch.zeros_like(input_ids)
             dummy_input_ids[torch.where(real_token_mask)] = mask_token_id
@@ -152,21 +231,13 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                     + dummy_embeds * (1 - prompt_type_ids).float().unsqueeze(-1)
             )
 
-            loss2, _prediction_logits, _seq_relationship_logits, _outputs = self._forward(
-                inputs_embeds=inputs_embeds,
+            dec_mlm_loss, _ = self.non_casual_decoder.forward(
+                hidden_states=inputs_embeds,
                 attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                position_ids=position_ids,
-                prompt_type_ids=prompt_type_ids,
-                head_mask=head_mask,
-                labels=labels,
-                next_sentence_label=None,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
+                head_mask=head_mask, labels=labels
             )
 
-            loss = loss + loss2
+            loss = loss + dec_mlm_loss
 
         if not return_dict:
             output = (prediction_logits,) + outputs[2:]
@@ -182,7 +253,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
 
 
 class LogLMForSequenceClassification(LogLMPreTrainedModel):
-    def __init__(self, config: BertConfig):
+    def __init__(self, config: LogLMConfig):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
