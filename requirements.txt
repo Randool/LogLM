@@ -3,3 +3,4 @@ tokenizers~=0.12.1
 torch
 dataclasses~=0.8
 zhon~=1.1.5
+thulac
