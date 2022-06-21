@@ -7,7 +7,7 @@
 @Description :  BertTokenizer with variable length of `[CLS]`
 """
 from itertools import chain
-from math import ceil, log
+from math import ceil, log2
 from typing import Optional, List, Union, Dict
 
 from transformers import BertTokenizer
@@ -85,7 +85,7 @@ class LogLMTokenizer(BertTokenizer):
     def _prompt_len(ids: List[int], pair_ids: Optional[List[int]] = None) -> int:
         len_ids = len(ids)
         len_pair_ids = 0 if pair_ids is None else len(pair_ids)
-        return ceil(log(max(1, len_ids + len_pair_ids)))
+        return ceil(log2(max(1, len_ids + len_pair_ids)))
 
     def prepare_for_model(
             self,
