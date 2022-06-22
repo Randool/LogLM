@@ -6,7 +6,7 @@ set -e
 
 TYPE='MLM'
 MERGE='true' # true | false
-RELEASE_CACHE='false' # true | false
+RELEASE_CACHE='true' # true | false
 MAX_PRED_PER_SEQ=80
 MAX_SEQ_LEN=128
 DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
@@ -19,13 +19,14 @@ PYTHONPATH=".." python preprocess.py \
     --type          ${TYPE} \
     --maxPredPerSeq ${MAX_PRED_PER_SEQ} \
     --dupEpochNum   ${EPOCH} \
-    --verboseStep   1000 \
+    --verboseStep   5000 \
     --vocabPath     ${VOCAB_PATH} \
     --maxSeqLen     ${MAX_SEQ_LEN} \
     --WWM \
     --inputPath     ${INPUT_PATH} \
     --outputPath    ${OUTPUT_PATH} \
-    --processNum    10 \
+    --processNum    20 \
+    --maskRatio     0.15 \
     --logPath       "${DATA_PATH}/logs"
 
 # merge data

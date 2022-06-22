@@ -8,14 +8,13 @@ REFER TO: https://github.com/google-research/bert/blob/eedf5716ce1268e56f0a50264
 import argparse
 import collections
 import functools
-import json
 import os
 import random
 import traceback
 from math import log2, ceil
 from multiprocessing import Pool
 from os.path import join
-from typing import List, Tuple, TextIO, Union
+from typing import List, Tuple, TextIO, Union, Iterable
 
 import thulac
 
@@ -159,19 +158,38 @@ class MLMPreprocessor:
 
         return segments
 
-    def _masked_ids(self, token_ids: Union[List[List[int]], List[int]]) -> Union[List[List[int]], List[int]]:
-        """ [A, B, C, D] => [A, [MASK], C, D]
-        of [[A,A], [B,B], [C], [D]] ==> [A, A, [MASK], [MASK], C, D]"""
+    def _masked_pos(self, token_ids: Union[List[int], List[List[int]]], bias: int) -> List[int]:
+        """ 只需保存被mask的token的位置即可。另外，使用“水库抽样”算法限制最大预测个数 """
         mask_ratio = self.config.maskRatio
-        mask_token_id = self.tokenizer.mask_token_id
+        max_pred_len = self.config.maxPredPerSeq
+        pos = []
 
         if isinstance(token_ids[0], int):
-            token_ids = [x if random.random() > mask_ratio else mask_token_id for x in token_ids]
-        else:  # List[List[int]]
-            token_ids = [x if random.random() > mask_ratio else [mask_token_id] * len(x) for x in token_ids]
-            token_ids = [x for xs in token_ids for x in xs]
+            for i in range(len(token_ids)):
+                if random.random() <= mask_ratio:
+                    if len(pos) < max_pred_len:
+                        pos.append(i + bias)
+                    else:
+                        replaced_idx = random.randint(0, i)
+                        if replaced_idx < max_pred_len:
+                            pos[replaced_idx] = i + bias
+        else:
+            chunk_pos = []
+            for i, ids in enumerate(token_ids):  # type: int, List[int]
+                if random.random() <= mask_ratio:
+                    chunk = [j + bias for j in range(len(ids))]
 
-        return token_ids
+                    if len(chunk_pos) < max_pred_len:
+                        chunk_pos.append(chunk)
+                    else:
+                        replaced_idx = random.randint(0, i)
+                        if replaced_idx < max_pred_len:
+                            chunk_pos[replaced_idx] = chunk
+
+                bias += len(ids)
+            pos = [idx for chunk in chunk_pos for idx in chunk]
+
+        return sorted(pos)
 
     def _create_sample(self, tokens_a: List[str], tokens_b: List[str]):
         prompt_len = self.prompt_length(len(tokens_a) + len(tokens_b))
@@ -187,23 +205,30 @@ class MLMPreprocessor:
         if self.config.useWWM:
             aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
             aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
-            input_ids = prompt_token_ids + self._masked_ids(aligned_tokens_a) \
-                        + sep_token_id + self._masked_ids(aligned_tokens_b) + sep_token_id
+            masked_pos = self._masked_pos(aligned_tokens_a, prompt_len) + \
+                         self._masked_pos(aligned_tokens_b, prompt_len + len(input_ids_a) + 1)
         else:
-            input_ids = prompt_token_ids + self._masked_ids(input_ids_a) \
-                        + sep_token_id + self._masked_ids(input_ids_b) + sep_token_id
+            masked_pos = self._masked_pos(input_ids_a, prompt_len) + \
+                         self._masked_pos(input_ids_b, prompt_len + len(input_ids_a) + 1)
 
-        return input_ids, token_type_lengths, prompt_len, labels
+        return labels, masked_pos, token_type_lengths, prompt_len
 
-    def _save_sample_to_output_file(self, input_ids: List[int], token_type_lengths: Tuple[int, int],
-                                    prompt_length: int, labels: List[int], SO_label: int):
-        example = {
-            "input_ids": input_ids, "token_type_lengths": token_type_lengths,
-            "prompt_length": prompt_length, "labels": labels, "SO_label": SO_label
-        }
-        self.writer.write(json.dumps(example, ensure_ascii=False) + "\n")
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
+                                    token_type_lengths: Tuple[int, int], prompt_length: int, SO_label: int):
+        """
+        保存格式：`input_ids|masked_pos|token_type_lengths|prompt_length|SO_label`
+        """
 
-    def _createAndSaveInstancesFromDocument(self, document: List[List[str]]):
+        def int_array_to_str(array: Iterable[int]) -> str:
+            return " ".join(map(str, array))
+
+        line = int_array_to_str(labels) + "|" + \
+               int_array_to_str(masked_pos) + "|" + \
+               int_array_to_str(token_type_lengths) + "|" + \
+               str(prompt_length) + "|" + str(SO_label) + "\n"
+        self.writer.write(line)
+
+    def _create_and_save_instances_from_document(self, document: List[List[str]]):
         current_chunk = []
         current_length = 0
         example_num = 0
@@ -235,10 +260,10 @@ class MLMPreprocessor:
                         tokens_a, tokens_b = tokens_b, tokens_a
                         SO_label = 0
 
-                    input_ids, token_type_lengths, prompt_length, labels = self._create_sample(tokens_a, tokens_b)
-
-                    self._save_sample_to_output_file(input_ids=input_ids, token_type_lengths=token_type_lengths,
-                                                     prompt_length=prompt_length, labels=labels, SO_label=SO_label)
+                    labels, masked_pos, token_type_lengths, prompt_len = self._create_sample(tokens_a, tokens_b)
+                    self._save_sample_to_output_file(labels=labels, masked_pos=masked_pos,
+                                                     token_type_lengths=token_type_lengths,
+                                                     prompt_length=prompt_len, SO_label=SO_label)
                     example_num += 1
 
                 current_chunk = []
@@ -270,7 +295,7 @@ class MLMPreprocessor:
                         print(f"=========== TEST INFO OF DOC {docNum} ===========\n")
 
                     # create instances for the document
-                    self._createAndSaveInstancesFromDocument(document)
+                    self._create_and_save_instances_from_document(document)
                     docNum += 1
 
                     if self.debug:
@@ -338,16 +363,17 @@ def trace_unhandled_exceptions(func):
     return wrapped_func
 
 
-def main():
-    debug_args = """
-    -i ${HOME}/Dataset/NLP/TencentMedicalPretrain/normalized/doc.0
-    -o ${HOME}/Dataset/NLP/TencentMedicalPretrain/processed/train
-    -v ${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt
-    --maxSeqLen 128
-    --WWM
-    """.replace("${HOME}", os.path.expanduser("~")).split()
+if __name__ == "__main__":
+    # debug_args = """
+    # -i ${HOME}/Dataset/NLP/TencentMedicalPretrain/normalized/doc.0
+    # -o ${HOME}/Dataset/NLP/TencentMedicalPretrain/processed/train
+    # -v ${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt
+    # --maxSeqLen 128
+    # --WWM
+    # """.replace("${HOME}", os.path.expanduser("~")).split()
+    # args = parse_args(debug_args)
 
-    args = parse_args(debug_args)
+    args = parse_args()
 
     random.seed(args.seed)
 
@@ -377,6 +403,7 @@ def main():
     else:
         raise NotImplementedError()
 
+
     @trace_unhandled_exceptions
     def wrapper(config_: MLMConfig, logpath_: str, inputFile_: str, outputFile_: str, epoch_: int):
         try:
@@ -388,6 +415,7 @@ def main():
         except Exception as e:
             logger.info(f"Process: epoch {epoch_}, file {os.path.basename(inputFile_)}")
             raise Exception(e)
+
 
     # get all inputFiles; each process deals with one input file.
     inputFiles = []
@@ -416,14 +444,16 @@ def main():
     if poolSize > 1:
         pool = Pool(poolSize)
         for epoch in range(args.dupEpochNum):
+            if epoch == args.dupEpochNum - 1:
+                config.maxSeqLen = 512
+
             for index, inputFile in enumerate(inputFiles):
-                outputFile = join(join(args.outputPath, f"epoch-{epoch}"), os.path.basename(inputFile))
+                outputFile = join(args.outputPath, f"epoch-{epoch}", os.path.basename(inputFile))
                 logger.info(
                     f"launching worker (epoch {epoch}, file {os.path.basename(inputFile)})\n"
                     f"      >>> input file: {inputFile}\n"
                     f"      >>> output file: {outputFile}"
                 )
-                # TODO: 为了防止只用到部分token，在训练过程中适当增长`max_length`
                 pool.apply_async(wrapper, args=(config, logPath, inputFile, outputFile, epoch))
 
         pool.close()
@@ -441,7 +471,3 @@ def main():
                 wrapper(config, logPath, inputFiles[index], outputFile, epoch)
 
     logger.info("Data preprocessing finished!")
-
-
-if __name__ == '__main__':
-    main()
