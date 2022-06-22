@@ -1,13 +1,18 @@
 #!/bin/bash
-# Author: Da Ma
-# Date: 2021.01.04
+#SBATCH --job-name=preprocess
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=30G
+#SBATCH --output=./preprocess-%A.log
+#SBATCH --error=./preprocess-%A.log
+#SBATCH --exclude=gqxx-01-[027,067,078,118,175]
 
 set -e
 
 TYPE='MLM'
 MERGE='true' # true | false
 RELEASE_CACHE='true' # true | false
-MAX_PRED_PER_SEQ=80
+MAX_PRED_PER_SEQ=40
 MAX_SEQ_LEN=128
 DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 INPUT_PATH="${DATA_PATH}/normalized"
@@ -25,7 +30,7 @@ PYTHONPATH=".." python preprocess.py \
     --WWM \
     --inputPath     ${INPUT_PATH} \
     --outputPath    ${OUTPUT_PATH} \
-    --processNum    20 \
+    --processNum    30 \
     --maskRatio     0.15 \
     --logPath       "${DATA_PATH}/logs"
 

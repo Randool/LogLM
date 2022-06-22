@@ -9,7 +9,8 @@ import random
 
 from tqdm import tqdm
 
-from utils import cutSentByNumOrder, cutTitle, get_logger, sentSplit, normalizeSent, removeDupTitle
+from utils.logger import get_logger
+from utils.utils import cutSentByNumOrder, cutTitle, sentSplit, normalizeSent, removeDupTitle
 
 logger = get_logger("normalizer")
 

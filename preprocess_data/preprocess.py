@@ -19,7 +19,7 @@ from typing import List, Tuple, TextIO, Union, Iterable
 import thulac
 
 from model import LogLMTokenizer
-from preprocess_data.utils import get_logger
+from utils.logger import get_logger
 
 # ========= MLM Instance Object ========= #
 MLMInstance = collections.namedtuple("MLMInstance", ["index", "label"])
