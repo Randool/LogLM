@@ -6,7 +6,9 @@ Description: Some preprocessor of transforming normalized text data into tokeniz
 REFER TO: https://github.com/google-research/bert/blob/eedf5716ce1268e56f0a50264a88cafad334ac61/create_pretraining_data.py#L338
 """
 import argparse
+import copy
 import functools
+import multiprocessing
 import os
 import random
 import traceback
@@ -211,9 +213,7 @@ class MLMPreprocessor:
 
     def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
                                     token_type_lengths: Tuple[int, int], prompt_length: int, SO_label: int):
-        """
-        保存格式：`input_ids|masked_pos|token_type_lengths|prompt_length|SO_label`
-        """
+        """ Format: `labels|masked_pos|token_type_lengths|prompt_length|SO_label` """
 
         def int_array_to_str(array: Iterable[int]) -> str:
             return " ".join(map(str, array))
@@ -434,14 +434,15 @@ if __name__ == "__main__":
             os.makedirs(epochPath)
 
     total = args.dupEpochNum * len(inputFiles)
-    poolSize = min(args.processNum, total)
+    poolSize = min(args.processNum, total, multiprocessing.cpu_count())
     logger.info(f"Process number: {poolSize}")
 
     if poolSize > 1:
         pool = Pool(poolSize)
         for epoch in range(args.dupEpochNum):
+            curr_config = copy.deepcopy(config)  # Configure isolation
             if epoch == args.dupEpochNum - 1:
-                config.maxSeqLen = 512
+                curr_config.maxSeqLen = 512
 
             for index, inputFile in enumerate(inputFiles):
                 outputFile = join(args.outputPath, f"epoch-{epoch}", os.path.basename(inputFile))
@@ -450,7 +451,7 @@ if __name__ == "__main__":
                     f"      >>> input file: {inputFile}\n"
                     f"      >>> output file: {outputFile}"
                 )
-                pool.apply_async(wrapper, args=(config, logPath, inputFile, outputFile, epoch))
+                pool.apply_async(wrapper, args=(curr_config, logPath, inputFile, outputFile, epoch))
 
         pool.close()
         pool.join()

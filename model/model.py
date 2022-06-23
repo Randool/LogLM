@@ -176,7 +176,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             head_mask=None,
             inputs_embeds=None,
             labels=None,
-            next_sentence_label=None,
+            sentence_pair_label=None,
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
@@ -185,7 +185,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         assert mask_token_id is not None, f"Require `mask_token_id`"
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         cal_mlm_loss = (labels is not None)
-        cal_nsp_loss = (next_sentence_label is not None)
+        cal_nsp_loss = (sentence_pair_label is not None)
 
         if (labels is not None) and (prompt_type_ids is None):
             prompt_type_ids = (1 <= input_ids) & (input_ids <= 11)
@@ -215,7 +215,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         if cal_nsp_loss:
             prompt_hiddens = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
             seq_relationship_logits = self.seq_relationship(prompt_hiddens)
-            next_sentence_loss = loss_fct(seq_relationship_logits.view(-1, 2), next_sentence_label.view(-1))
+            next_sentence_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
             loss = next_sentence_loss if (loss is None) else loss + next_sentence_loss
 
         # Second pass: mlm_loss

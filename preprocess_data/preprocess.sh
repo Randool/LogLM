@@ -52,7 +52,7 @@ if [[ ${MERGE} == 'true' ]]; then
 fi
 
 # Shuffle lines to prevent build random index of lines
-if [[ ${SHUFFLE} == 'true' ]]; then
+if [[ ${MERGE} == 'true' && ${SHUFFLE} == 'true' ]]; then
     for i in `seq 0 $((${EPOCH} - 1))`; do
         SEED=$((${SHUF_SEED} + ${i}))
         raw_file="${OUTPUT_PATH}/epoch-${i}.pretrain.data"

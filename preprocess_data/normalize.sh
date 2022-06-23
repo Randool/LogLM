@@ -10,7 +10,7 @@ INPUT_PATH="${DATA_PATH}/15.medical_plm_corpus"
 OUTPUT_PATH="${DATA_PATH}/normalized"
 RATE=1
 
-python normalize.py \
+PYTHONPATH=.. python normalize.py \
     --type ${TYPE} \
     --inputPath ${INPUT_PATH} \
     --outputPath ${OUTPUT_PATH} \
