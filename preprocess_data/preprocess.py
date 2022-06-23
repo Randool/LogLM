@@ -6,7 +6,6 @@ Description: Some preprocessor of transforming normalized text data into tokeniz
 REFER TO: https://github.com/google-research/bert/blob/eedf5716ce1268e56f0a50264a88cafad334ac61/create_pretraining_data.py#L338
 """
 import argparse
-import collections
 import functools
 import os
 import random
@@ -20,9 +19,6 @@ import thulac
 
 from model import LogLMTokenizer
 from utils.logger import get_logger
-
-# ========= MLM Instance Object ========= #
-MLMInstance = collections.namedtuple("MLMInstance", ["index", "label"])
 
 
 class MLMConfig:

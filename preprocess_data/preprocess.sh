@@ -11,6 +11,7 @@ set -e
 
 TYPE='MLM'
 MERGE='true' # true | false
+SHUFFLE='true' # true | false
 RELEASE_CACHE='true' # true | false
 MAX_PRED_PER_SEQ=40
 MAX_SEQ_LEN=128
@@ -19,6 +20,7 @@ INPUT_PATH="${DATA_PATH}/normalized"
 OUTPUT_PATH="${DATA_PATH}/processed/train"
 VOCAB_PATH="${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt"
 EPOCH=10
+SHUF_SEED=42
 
 PYTHONPATH=".." python preprocess.py \
     --type          ${TYPE} \
@@ -46,5 +48,15 @@ if [[ ${MERGE} == 'true' ]]; then
                 rm -rf ${EPOCH_PATH}
             fi
         fi
+    done
+fi
+
+# Shuffle lines to prevent build random index of lines
+if [[ ${SHUFFLE} == 'true' ]]; then
+    for i in `seq 0 $((${EPOCH} - 1))`; do
+        SEED=$((${SHUF_SEED} + ${i}))
+        raw_file="${OUTPUT_PATH}/epoch-${i}.pretrain.data"
+        echo "Shuffle [${SEED}]: ${raw_file}"
+        shuf --random-source=<(yes ${SEED}) "${raw_file}" > "${raw_file}.shuf"
     done
 fi
