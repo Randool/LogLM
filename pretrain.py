@@ -8,10 +8,11 @@ import logging
 import os
 from typing import Optional
 
+import torch
 from dataclasses import dataclass, field
 from transformers import TrainingArguments, HfArgumentParser, set_seed
 
-from dataset import JsonLineLargeDataset, MLMCollateFunc
+from dataset import JsonLineLargeDataset
 from model import LogLMTokenizer, LogLMConfig, LogLMForPreTraining
 from trainer import PlmTrainer
 from utils import get_logger, is_main_process
@@ -27,9 +28,7 @@ class DataArguments:
 
 @dataclass
 class ModelArguments:
-    resume_checkpoint: Optional[str] = field(
-        default=None, metadata={"help": "resume from this checkpoint."}
-    )
+    resume_checkpoint: Optional[str] = field(default=None, metadata={"help": "resume from this checkpoint."})
     tasks: Optional[str] = field(default="MLM", metadata={"help": "pre-training tasks"})
     hidden_size: Optional[int] = field(
         default=768,
@@ -41,27 +40,21 @@ class ModelArguments:
     )
     num_attention_heads: Optional[int] = field(
         default=12,
-        metadata={
-            "help": "Number of attention heads for each attention layer in the Transformer encoder"
-        },
+        metadata={"help": "Number of attention heads for each attention layer in the Transformer encoder"},
     )
     intermediate_size: Optional[int] = field(
         default=3072,
-        metadata={
-            "help": "Dimensionality of the `intermediate` (often named feed-forward) layer in the Transformer encoder"
-        },
+        metadata={"help": "Dimensionality of the `intermediate` (often named feed-forward) "
+                          "layer in the Transformer encoder"},
     )
     hidden_act: Optional[str] = field(
         default="gelu",
-        metadata={
-            "help": "The non-linear activation function (function or string) in the encoder and pooler"
-        },
+        metadata={"help": "The non-linear activation function (function or string) in the encoder and pooler"},
     )
     hidden_dropout_prob: Optional[float] = field(
         default=0.1,
-        metadata={
-            "help": "The dropout probability for all fully connected layers in the embeddings, encoder, and pooler"
-        },
+        metadata={"help": "The dropout probability for all fully connected layers in the "
+                          "embeddings, encoder, and pooler"},
     )
     attention_probs_dropout_prob: Optional[float] = field(
         default=0.1,
@@ -69,9 +62,7 @@ class ModelArguments:
     )
     max_position_embeddings: Optional[int] = field(
         default=512,
-        metadata={
-            "help": "The maximum sequence length that this model might ever be used with"
-        },
+        metadata={"help": "The maximum sequence length that this model might ever be used with"},
     )
     type_vocab_size: Optional[int] = field(
         default=2,
@@ -79,9 +70,8 @@ class ModelArguments:
     )
     initializer_range: Optional[float] = field(
         default=0.02,
-        metadata={
-            "help": "The standard deviation of the truncated_normal_initializer for initializing all weight matrices"
-        },
+        metadata={"help": "The standard deviation of the truncated_normal_initializer "
+                          "for initializing all weight matrices"},
     )
     layer_norm_eps: Optional[float] = field(
         default=1e-12,
@@ -92,9 +82,8 @@ class ModelArguments:
     )
     use_cache: Optional[bool] = field(
         default=True,
-        metadata={
-            "help": "Whether or not the model should return the last key/values attentions (not used by all models)"
-        },
+        metadata={"help": "Whether or not the model should return the last "
+                          "key/values attentions (not used by all models)"},
     )
 
 
@@ -125,17 +114,8 @@ def pretrain():
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    # ============ Tokenizer ============ #
-    logger.info("building tokenizer...")
     tokenizer = LogLMTokenizer(dataArgs.vocabPath)
-
-    # ============ Collator function ============ #
-    def collate_func(batch):
-        # skip
-        if not batch[0]:
-            return {}
-
-        return MLMCollateFunc(batch, tokenizer.pad_token_id)
+    logger.info(f"Tokenizer: {len(tokenizer)}")
 
     # ============ Config ============ #
     config = LogLMConfig(
@@ -158,23 +138,21 @@ def pretrain():
 
     # ============ Model ============ #
     model = LogLMForPreTraining(config)
+    logger.info(f"Model: {sum(map(torch.numel, model.parameters()))} params")
 
     # ============ Datasets ============ #
     # train datasets configuration list construction
     datasetConfigList = []
-    epochDataFiles, epochIndexFiles = [], []
+    epochDataFiles = []
     index = 0
     for epochFile in sorted(os.listdir(dataArgs.trainDataPath), key=lambda x: int(x.split(".")[0][6:])):
         if not epochFile.startswith("."):
             epochPath = os.path.join(dataArgs.trainDataPath, epochFile)
-            if index % 2:
-                epochIndexFiles.append(epochPath)
-            else:
-                epochDataFiles.append(epochPath)
+            epochDataFiles.append(epochPath)
             index += 1
 
     for index, epochDataFile in enumerate(epochDataFiles):
-        datasetConfigList.append({"dataFile": epochDataFile, "indexFile": epochIndexFiles[index]})
+        datasetConfigList.append({"dataFile": epochDataFile})
 
     # evaluation dataset
     files = []

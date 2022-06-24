@@ -16,10 +16,11 @@ from torch.utils.data import Dataset, IterableDataset
 
 
 class DatasetForShuffledFile(IterableDataset):
-    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int):
+    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, num_examples: int = None):
         self.data_file = data_file
         self.mask_token_id = mask_token_id
         self.pad_token_id = pad_token_id
+        self._num_examples = num_examples
 
     def __iter__(self):
         def str_to_int_array(string: str) -> List[int]:
@@ -48,6 +49,14 @@ class DatasetForShuffledFile(IterableDataset):
 
                 yield input_ids, token_type_ids, prompt_type_ids, labels, SO_label
 
+    def __len__(self):
+        if self._num_examples:
+            return self._num_examples
+        with open(self.data_file) as f:
+            for _ in f:
+                self._num_examples += 1
+        return self._num_examples
+
     def collate_fn(self, batch: List[tuple]) -> dict:
         # The model needs: input_ids, attention_mask, token_type_ids, prompt_type_ids, labels, sentence_pair_label
         input_ids, token_type_ids, prompt_type_ids, labels, SO_label = [], [], [], [], []
@@ -60,7 +69,7 @@ class DatasetForShuffledFile(IterableDataset):
             prompt_type_ids.append(pair[2])
             labels.append(pair[3])
             SO_label.append(pair[4])
-            max_length = max(max_length, pair[0])
+            max_length = max(max_length, len(pair[0]))
 
         for i in range(len(batch)):
             length = len(input_ids[i])
@@ -78,6 +87,7 @@ class DatasetForShuffledFile(IterableDataset):
             "prompt_type_ids": torch.tensor(prompt_type_ids, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
             "sentence_pair_label": torch.tensor(SO_label, dtype=torch.long),
+            "mask_token_id": self.mask_token_id,
         }
 
 

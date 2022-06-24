@@ -6,6 +6,7 @@ Description: the main program of normalizing data.
 import argparse
 import os
 import random
+from os.path import join, expanduser
 
 from tqdm import tqdm
 
@@ -15,43 +16,57 @@ from utils.utils import cutSentByNumOrder, cutTitle, sentSplit, normalizeSent, r
 logger = get_logger("normalizer")
 
 
-class BaseNormalizer:
-    def __init__(self, inputPath: str, outputPath: str, docNumPerFile: int = -1):
-        """
-        Args:
-            inputPath (str): input directory or input file path
-            outputPath (str): output file path
-        """
-        self.inputPath = inputPath
-        self.outputPath = outputPath
-        self.docNumPerFile = docNumPerFile
+def parse():
+    parser = argparse.ArgumentParser("Preprocessing Normalizer Argument Parser")
 
-    def run(self):
-        raise NotImplementedError()
+    _HOME = expanduser("~")
+    _corpus_dir = os.path.join(_HOME, "Dataset/NLP/TencentMedicalPretrain/corpus")
+    _raw_corpus_dir = join(_corpus_dir, "15.medical_plm_corpus")
+    _normalized_dir = join(_corpus_dir, "normalized")
+    _dev_normalized_dir = join(_corpus_dir, "normalized_dev")
+
+    parser.add_argument("--type", type=str, default="mlm", help="the normalizer type")
+    parser.add_argument("--inputPath", "-i", type=str, default=_raw_corpus_dir, help="input data path")
+    parser.add_argument("--outputPath", "-o", type=str, default=_normalized_dir, help="output path for train")
+    parser.add_argument("--dev_output_path", type=str, default=_dev_normalized_dir, help="output path for dev")
+    parser.add_argument("--rate", type=float, default=1.0, help="the data rate to select")
+    parser.add_argument("--docNumPerFile", type=int, default=100000,
+                        help="the document number per file. -1 means saving all documents into one single file.")
+    parser.add_argument("--num_dev_doc", type=int, default=10000, help="Number of doc for dev")
+    parser.add_argument("--seed", type=int, default=42, help="seed")
+
+    return parser.parse_args()
 
 
-class MLMNormalizer(BaseNormalizer):
-    def __init__(self, inputPath: str, outputPath: str, rate: float, docNumPerFile: int = -1):
+class MLMNormalizer:
+    def __init__(self, inputPath: str, outputPath: str, dev_output_path: str, rate: float,
+                 num_dev_doc: int, docNumPerFile: int = -1, seed=42):
         """This normalizer is for MLM task.
         NOTE: This normalizer supports to select a subset of total examples.
 
         Args:
             rate (float): the rate of examples to select.
         """
-        super().__init__(inputPath, outputPath, docNumPerFile)
+        self.inputPath = inputPath
+        self.outputPath = outputPath
+        self.dev_output_path = dev_output_path
+        self.num_dev_doc = num_dev_doc
+        self.docNumPerFile = docNumPerFile
 
         self.rate = rate
 
-        if not os.path.exists(outputPath):
-            os.makedirs(outputPath)
+        os.makedirs(outputPath, exist_ok=True)
+        os.makedirs(dev_output_path, exist_ok=True)
 
-        outputFile = (
-            self.outputPath
-            if self.docNumPerFile == -1
-            else os.path.join(self.outputPath, "doc.0")
-        )
-        self.docNum = 0
-        self.outf = open(outputFile, "w")
+        self.doc_file_id = 0
+        self.outf = open(os.path.join(outputPath, f"doc.{self.doc_file_id}"), "w")
+
+        self.dev_buff = []
+        random.seed(seed)
+
+    def __del__(self):
+        if not self.outf.closed:
+            self.outf.close()
 
     @staticmethod
     def _countLines(inputFile: str) -> int:
@@ -65,70 +80,63 @@ class MLMNormalizer(BaseNormalizer):
     def _runHelper(self, inputFile: str, outputPath: str):
         """Normalize for the specific file."""
         total = self._countLines(inputFile)
-        selected = random.sample(list(range(total)), int(total * self.rate))
-        selected.sort()
-
         logger.info(f"total: {total} | selected: {int(total * self.rate)}")
+        doc_cnt = 0
+        train_doc_cnt = 0
 
-        lineIndex = 0
-        selectedExampleIndex = 0
         with open(inputFile, "r") as inf:
             for line in tqdm(inf.readlines(), ncols=64):
                 line = line.strip()
-                if selectedExampleIndex >= len(selected):
-                    break
-
                 if line:
-                    if lineIndex == selected[selectedExampleIndex]:
-                        # tokenize the document into sentence by sentence.
-                        # =============== NOTE ============== #
-                        # FORMAT: each doc is seperated by an empty line.
-                        #
-                        # SOME NORMALIZATION PROCEDURE: [FIXME]
-                        """
-                        1. Cut the sentence by punctuation first.
-                        2. Cut the sentences more precisely. Consider the
-                           number order, e.g. 1. (1) and so on.
-                        3. Clean each sentence:
-                            (1) remove leading punctuations
-                            (2) remove trivial sentences, e.g. 1。
-                            (3) split [\\t] delimited sentences
-                            (4) remove spaces
-                        """
-                        coarsedSents = sentSplit(line)
+                    """
+                    1. Cut the sentence by punctuation first.
+                    2. Cut the sentences more precisely. Consider the
+                       number order, e.g. 1. (1) and so on.
+                    3. Clean each sentence:
+                        (1) remove leading punctuations
+                        (2) remove trivial sentences, e.g. 1。
+                        (3) split [\\t] delimited sentences
+                        (4) remove spaces
+                    """
+                    coarsedSents = sentSplit(line)
 
-                        # cut sentence further according to the number order, e.g. (1) 1、
-                        finedSents = []
-                        for coarsedSent in coarsedSents:
-                            finedSents += cutSentByNumOrder(coarsedSent)
+                    # cut sentence further according to the number order, e.g. (1) 1、
+                    finedSents = []
+                    for coarsedSent in coarsedSents:
+                        finedSents += cutSentByNumOrder(coarsedSent)
 
-                        # select the title specifically
-                        finedSents = cutTitle(finedSents[0]) + finedSents[1:]
+                    # select the title specifically
+                    finedSents = cutTitle(finedSents[0]) + finedSents[1:]
 
-                        # normalize
-                        sents = []
-                        for finedSent in finedSents:
-                            sents += normalizeSent(finedSent)
+                    # normalize
+                    sents = []
+                    for finedSent in finedSents:
+                        sents += normalizeSent(finedSent)
 
-                        # remove duplicated title
-                        sents = removeDupTitle(sents)
+                    # remove duplicated title
+                    sents = removeDupTitle(sents)
 
-                        # write sents to the output file
-                        self.outf.write(
-                            "\n".join(map(lambda x: x.strip(), sents)) + "\n\n"
-                        )
+                    # write sents to the `train_dir` or `dev_dir`
+                    chunk = "\n".join(map(lambda x: x.strip(), sents)) + "\n\n"
 
-                        selectedExampleIndex += 1
+                    if len(self.dev_buff) < self.num_dev_doc:
+                        self.dev_buff.append(chunk)
+                    else:
+                        # Using reservoir sampling algorithm to decide whether the
+                        # chunk be written to train_dev or dev_buff
+                        dice = random.randint(0, doc_cnt)
+                        if dice < self.num_dev_doc:
+                            chunk, self.dev_buff[dice] = self.dev_buff[dice], chunk
 
-                        if self.docNumPerFile > -1 and not (
-                                selectedExampleIndex % self.docNumPerFile
-                        ):
+                        train_doc_cnt += 1
+                        self.outf.write(chunk)
+
+                        if (self.docNumPerFile > -1) and not (train_doc_cnt % self.docNumPerFile):
                             self.outf.close()
-                            self.docNum += 1
-                            self.outf = open(
-                                os.path.join(outputPath, f"doc.{self.docNum}"), "w"
-                            )
-                    lineIndex += 1
+                            self.doc_file_id += 1
+                            self.outf = open(os.path.join(outputPath, f"doc.{self.doc_file_id}"), "w")
+
+                    doc_cnt += 1
 
     def run(self):
         # collect all the input files
@@ -143,11 +151,7 @@ class MLMNormalizer(BaseNormalizer):
         inputFiles = sorted(inputFiles)
 
         # normalize for each file, respectively
-        if self.docNumPerFile == -1:
-            with open(self.outputPath, "w"):
-                pass
-        elif not os.path.exists(self.outputPath):
-            os.makedirs(self.outputPath)
+        os.makedirs(self.outputPath, exist_ok=True)
 
         for inputFile in inputFiles:
             logger.info(f"normalize file: {inputFile}")
@@ -155,19 +159,10 @@ class MLMNormalizer(BaseNormalizer):
 
         self.outf.close()
 
-
-def parse():
-    parser = argparse.ArgumentParser("Preprocessing Normalizer Argument Parser")
-
-    parser.add_argument("--type", type=str, default="mlm", help="the normalizer type")
-    parser.add_argument("--inputPath", "-i", type=str, required=True, help="input data path")
-    parser.add_argument("--outputPath", "-o", type=str, required=True, help="output data path")
-    parser.add_argument("--rate", type=float, default=1.0, help="the data rate to select")
-    parser.add_argument("--docNumPerFile", type=int, default=100000,
-                        help="the document number per file. -1 means saving all documents into one single file.")
-    parser.add_argument("--seed", type=int, default=42, help="seed")
-
-    return parser.parse_args()
+        # Write selected doc to dev_dir
+        with open(os.path.join(self.dev_output_path, "doc.0"), "w") as f:
+            for chunk in self.dev_buff:
+                f.write(chunk)
 
 
 if __name__ == "__main__":
@@ -181,7 +176,10 @@ if __name__ == "__main__":
     logger.info(f"saving to: {args.outputPath}")
 
     if args.type.lower() == "mlm":
-        normalizer = MLMNormalizer(args.inputPath, args.outputPath, args.rate, args.docNumPerFile)
+        normalizer = MLMNormalizer(
+            inputPath=args.inputPath, outputPath=args.outputPath, dev_output_path=args.dev_output_path,
+            rate=args.rate, num_dev_doc=args.num_dev_doc, docNumPerFile=args.docNumPerFile, seed=args.seed
+        )
     else:
         raise NotImplementedError()
 

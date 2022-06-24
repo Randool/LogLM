@@ -4,21 +4,20 @@ Date: 2022.01.07
 Description: some trainer objects used in training. Refer to https://github.com/huggingface/transformers/blob/master/src/transformers/trainer.py
 """
 
+import math
+import os
+from typing import List, Dict, Optional, Union, Any, TYPE_CHECKING, Tuple
+
+import torch
+import torch.distributed as dist
+from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm
 from transformers import Trainer, set_seed, __version__
-from transformers.trainer_utils import (
-    get_last_checkpoint,
-    TrainOutput,
-)
+from transformers.configuration_utils import PretrainedConfig
 from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 from transformers.trainer_callback import TrainerState
-from transformers.configuration_utils import PretrainedConfig
-from typing import List, Dict, Optional, Union, Any, TYPE_CHECKING, Tuple
-import os
-import torch
-import math
-from tqdm import tqdm
-from torch.utils.data import DataLoader, DistributedSampler
-import torch.distributed as dist
+from transformers.trainer_utils import get_last_checkpoint, TrainOutput
+
 from utils.logger import is_main_process, get_logger
 
 if TYPE_CHECKING:
@@ -27,9 +26,10 @@ if TYPE_CHECKING:
 TRAINER_STATE_NAME = "trainer_state.json"
 
 
-def moveToCuda(data: Dict) -> Dict:
-    for key in data:
-        data[key] = data[key].cuda()
+def dict_to_device(data: dict, device) -> dict:
+    for key, value in data.items():
+        if torch.is_tensor(value):
+            data[key] = value.to(device)
     return data
 
 
@@ -39,12 +39,12 @@ class PlmTrainer(Trainer):
     """
 
     def __init__(
-        self,
-        datasetType=None,
-        epochDatasetConfigList: List[Dict] = None,
-        logPath: str = None,
-        *args,
-        **kwargs,
+            self,
+            datasetType=None,
+            epochDatasetConfigList: List[Dict] = None,
+            logPath: str = None,
+            *args,
+            **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
@@ -139,11 +139,11 @@ class PlmTrainer(Trainer):
         return self.get_train_dataloader()
 
     def train(
-        self,
-        resume_from_checkpoint: Optional[Union[str, bool]] = None,
-        trial: Union["optuna.Trial", Dict[str, Any]] = None,
-        ignore_keys_for_eval: Optional[List[str]] = None,
-        **kwargs,
+            self,
+            resume_from_checkpoint: Optional[Union[str, bool]] = None,
+            trial: Union["optuna.Trial", Dict[str, Any]] = None,
+            ignore_keys_for_eval: Optional[List[str]] = None,
+            **kwargs,
     ):
         """
         NOTE: Most codes are from the official huggingface storehouse.
@@ -166,7 +166,7 @@ class PlmTrainer(Trainer):
         self._getEpochTrainingSteps()
 
         total_train_batch_size = (
-            args.train_batch_size * args.gradient_accumulation_steps * args.world_size
+                args.train_batch_size * args.gradient_accumulation_steps * args.world_size
         )
 
         # NOTE: Each epoch has different data sizes due to the randomness.
@@ -262,7 +262,7 @@ class PlmTrainer(Trainer):
 
         # calculate steps to skip
         if resume_from_checkpoint is not None and os.path.isfile(
-            os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
+                os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
         ):
             self.state = TrainerState.load_from_json(
                 os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
@@ -364,7 +364,7 @@ class PlmTrainer(Trainer):
 
         for epoch in range(epochs_trained, int(num_train_epochs) + 1):
             if isinstance(train_dataloader, DataLoader) and isinstance(
-                train_dataloader.sampler, DistributedSampler
+                    train_dataloader.sampler, DistributedSampler
             ):
                 train_dataloader.sampler.set_epoch(epoch)
 
@@ -400,9 +400,9 @@ class PlmTrainer(Trainer):
                     )
 
                 if (
-                    ((step + 1) % args.gradient_accumulation_steps != 0)
-                    and args.local_rank != -1
-                    and args._no_sync_in_gradient_accumulation
+                        ((step + 1) % args.gradient_accumulation_steps != 0)
+                        and args.local_rank != -1
+                        and args._no_sync_in_gradient_accumulation
                 ):
                     # Avoid unnecessary DDP synchronization since there will be no backward pass on this example.
                     with model.no_sync():
@@ -412,15 +412,15 @@ class PlmTrainer(Trainer):
                 self.current_flos += float(self.floating_point_ops(inputs))
 
                 if (step + 1) % args.gradient_accumulation_steps == 0 or (
-                    # last step in epoch but step is always smaller than gradient_accumulation_steps
-                    steps_in_epoch <= args.gradient_accumulation_steps
-                    and (step + 1) == steps_in_epoch
+                        # last step in epoch but step is always smaller than gradient_accumulation_steps
+                        steps_in_epoch <= args.gradient_accumulation_steps
+                        and (step + 1) == steps_in_epoch
                 ):
                     # Gradient clipping
                     if (
-                        args.max_grad_norm is not None
-                        and args.max_grad_norm > 0
-                        and not self.deepspeed
+                            args.max_grad_norm is not None
+                            and args.max_grad_norm > 0
+                            and not self.deepspeed
                     ):
                         # deepspeed does its own clipping
 
@@ -566,7 +566,7 @@ class PlmTrainer(Trainer):
         return lossDict
 
     def training_step(
-        self, model: torch.nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]
+            self, model: torch.nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]
     ) -> torch.Tensor:
         model.train()
         inputs = self._prepare_inputs(inputs)
@@ -695,7 +695,7 @@ class PlmTrainer(Trainer):
     ) -> Tuple[Optional[float], Optional[torch.Tensor], Optional[torch.Tensor]]:
         # pop labels
         # [FIXME: POP LABELS HERE!]
-        inputs = moveToCuda(inputs)
+        inputs = dict_to_device(inputs, model.device)
 
         labels = tuple()
 

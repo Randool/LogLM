@@ -360,15 +360,6 @@ def trace_unhandled_exceptions(func):
 
 
 if __name__ == "__main__":
-    # debug_args = """
-    # -i ${HOME}/Dataset/NLP/TencentMedicalPretrain/normalized/doc.0
-    # -o ${HOME}/Dataset/NLP/TencentMedicalPretrain/processed/train
-    # -v ${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt
-    # --maxSeqLen 128
-    # --WWM
-    # """.replace("${HOME}", os.path.expanduser("~")).split()
-    # args = parse_args(debug_args)
-
     args = parse_args()
 
     random.seed(args.seed)
