@@ -6,13 +6,13 @@
 @Version     :  1.0
 """
 import copy
-import json
-import os
-from typing import List, Dict
+from collections import namedtuple
+from typing import List
 
-import numpy as np
 import torch
-from torch.utils.data import Dataset, IterableDataset
+from torch.utils.data import IterableDataset
+
+Items = namedtuple("Items", ("input_ids", "token_type_ids", "prompt_type_ids", "labels", "SO_label"))
 
 
 class DatasetForShuffledFile(IterableDataset):
@@ -20,7 +20,7 @@ class DatasetForShuffledFile(IterableDataset):
         self.data_file = data_file
         self.mask_token_id = mask_token_id
         self.pad_token_id = pad_token_id
-        self._num_examples = num_examples
+        self.num_examples = num_examples
 
     def __iter__(self):
         def str_to_int_array(string: str) -> List[int]:
@@ -47,29 +47,34 @@ class DatasetForShuffledFile(IterableDataset):
                 token_type_ids = [0] * token_type_lengths[0] + [1] * token_type_lengths[1]
                 prompt_type_ids = [1] * prompt_length + [0] * (len(labels) - prompt_length)
 
-                yield input_ids, token_type_ids, prompt_type_ids, labels, SO_label
+                yield Items(
+                    input_ids=input_ids,
+                    token_type_ids=token_type_ids,
+                    prompt_type_ids=prompt_type_ids,
+                    labels=labels,
+                    SO_label=SO_label
+                )
 
     def __len__(self):
-        if self._num_examples:
-            return self._num_examples
+        if self.num_examples:
+            return self.num_examples
         with open(self.data_file) as f:
             for _ in f:
-                self._num_examples += 1
-        return self._num_examples
+                self.num_examples += 1
+        return self.num_examples
 
-    def collate_fn(self, batch: List[tuple]) -> dict:
-        # The model needs: input_ids, attention_mask, token_type_ids, prompt_type_ids, labels, sentence_pair_label
+    def collate_fn(self, batch: List[Items]) -> dict:
         input_ids, token_type_ids, prompt_type_ids, labels, SO_label = [], [], [], [], []
         attention_mask = []
         max_length = 0
 
-        for pair in batch:
-            input_ids.append(pair[0])
-            token_type_ids.append(pair[1])
-            prompt_type_ids.append(pair[2])
-            labels.append(pair[3])
-            SO_label.append(pair[4])
-            max_length = max(max_length, len(pair[0]))
+        for items in batch:
+            input_ids.append(items.input_ids)
+            token_type_ids.append(items.token_type_ids)
+            prompt_type_ids.append(items.prompt_type_ids)
+            labels.append(items.labels)
+            SO_label.append(items.SO_label)
+            max_length = max(max_length, len(items.input_ids))
 
         for i in range(len(batch)):
             length = len(input_ids[i])
@@ -78,7 +83,7 @@ class DatasetForShuffledFile(IterableDataset):
             attention_mask.append([1] * length + [0] * pad_length)
             token_type_ids[i] += [0] * pad_length
             prompt_type_ids[i] += [0] * pad_length
-            labels[i] += [self.pad_token_id] * pad_length
+            labels[i] += [-100] * pad_length
 
         return {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
@@ -89,131 +94,3 @@ class DatasetForShuffledFile(IterableDataset):
             "sentence_pair_label": torch.tensor(SO_label, dtype=torch.long),
             "mask_token_id": self.mask_token_id,
         }
-
-
-class SkipDataset(Dataset):
-    """
-    NOTE: When skipping data, return None to escape the processing of collator function.
-    """
-
-    def __init__(self, skipNum: int = 0) -> None:
-        super().__init__()
-        self.skipNum = skipNum
-
-    def setSkipNum(self, skipNum: int):
-        self.skipNum = skipNum
-
-    def clearSkipNum(self):
-        self.skipNum = 0
-
-
-class JsonLineLargeDataset(SkipDataset):
-    """
-    The dataset will open the large file when we read one sample.
-    """
-
-    def __init__(self, dataFile: str = None, indexFile: str = None) -> None:
-        super().__init__()
-
-        self.dataFile = dataFile
-        self.offsets = self._loadIndex(indexFile)
-
-    @staticmethod
-    def _loadIndex(indexFile: str) -> List[int]:
-        with open(indexFile, "r") as reader:
-            indices = list(map(int, reader.read().strip().split("\n")))
-        return np.array(indices, dtype=int)
-
-    def __getitem__(self, index: int) -> Dict:
-        if self.skipNum > 0:
-            self.skipNum -= 1
-            return None
-        byteOffset = self.offsets[index]
-
-        # NOTE: *** open the data file every time ***
-        with open(self.dataFile, "rb") as reader:
-            reader.seek(byteOffset, os.SEEK_SET)
-            line = reader.readline().decode().strip()
-            example = json.loads(line)
-
-        return example
-
-    def __len__(self) -> int:
-        return len(self.offsets)
-
-
-def MLMCollateFunc(batch: List, padTokenId: int, clsTokenId: int = None) -> Dict:
-    inputs = {
-        "input_ids": [],
-        "token_type_ids": [],
-        "tokenLabels": [],
-        "sentLabels": [],
-        "word_left_bound": [],
-        "word_right_bound": [],
-    }
-
-    # gather
-    for example in batch:
-        inputs["input_ids"].append(example["MaskedToken"])
-        inputs["token_type_ids"].append(example["segBound"])
-        inputs["tokenLabels"].append(example["MaskedLabel"])
-        inputs["sentLabels"].append(example["SOLabel"])
-        inputs["word_left_bound"].append(example["wordLeftBound"])
-        inputs["word_right_bound"].append(example["wordRightBound"])
-
-    # transform to Tensors
-    inputs["input_ids"] = torch.LongTensor(inputs["input_ids"])
-    inputs["tokenLabels"] = torch.LongTensor(inputs["tokenLabels"])
-    inputs["sentLabels"] = torch.LongTensor(inputs["sentLabels"])
-    inputs["word_left_bound"] = torch.LongTensor(inputs["word_left_bound"])
-    inputs["word_right_bound"] = torch.LongTensor(inputs["word_right_bound"])
-
-    # token type ids
-    maxLen = inputs["input_ids"].size(1)
-    boundary = torch.LongTensor(inputs["token_type_ids"]).view(-1, 1)
-    order = torch.arange(maxLen, dtype=torch.long)
-    token_type_ids = torch.ge(order, boundary).type(torch.long)
-    inputs["token_type_ids"] = token_type_ids
-
-    # attention mask
-    inputs["attention_mask"] = torch.ne(inputs["input_ids"], padTokenId).type(torch.int)
-
-    return inputs
-
-
-def DNCollateFunc(batch: List, padTokenId: int, clsTokenId: int) -> Dict:
-    inputs = {
-        "input_ids": [],
-        "dn_decoder_input_ids": [],
-        "dnLabels": [],
-    }
-
-    for example in batch:
-        inputs["input_ids"].append(example["sharedToken"])
-        inputs["dn_decoder_input_ids"].append([clsTokenId] + example["dnLabel"][:-1])
-        inputs["dnLabels"].append(example["dnLabel"])
-
-    inputs["input_ids"] = torch.LongTensor(inputs["input_ids"])
-    inputs["dn_decoder_input_ids"] = torch.LongTensor(inputs["dn_decoder_input_ids"])
-    inputs["dn_decoder_input_ids"][inputs["dn_decoder_input_ids"] == -100] = padTokenId
-    inputs["dnLabels"] = torch.LongTensor(inputs["dnLabels"])
-
-    inputs["attention_mask"] = torch.ne(inputs["input_ids"], padTokenId).type(torch.int)
-
-    return inputs
-
-
-def MLMWithDNCollateFunc(batch: List, padTokenId: int, clsTokenId: int) -> Dict:
-    inputs = MLMCollateFunc(batch, padTokenId)
-    inputs["dn_decoder_input_ids"] = []
-    inputs["dnLabels"] = []
-
-    for example in batch:
-        inputs["dn_decoder_input_ids"].append([clsTokenId] + example["dnLabel"][:-1])
-        inputs["dnLabels"].append(example["dnLabel"])
-
-    inputs["dn_decoder_input_ids"] = torch.LongTensor(inputs["dn_decoder_input_ids"])
-    inputs["dn_decoder_input_ids"][inputs["dn_decoder_input_ids"] == -100] = padTokenId
-    inputs["dnLabels"] = torch.LongTensor(inputs["dnLabels"])
-
-    return inputs

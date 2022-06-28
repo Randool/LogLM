@@ -18,6 +18,8 @@ from transformers.file_utils import ModelOutput
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.bert.modeling_bert import BertLMPredictionHead, BertEncoder
 
+from utils.label_smooth import LabelSmoother
+
 
 class LogLMConfig(BertConfig):
     model_type = "bert"
@@ -83,7 +85,12 @@ class LogLMConfig(BertConfig):
 @dataclass
 class LogLMForPreTrainingOutput(ModelOutput):
     loss: Optional[torch.FloatTensor] = None
+    mlm_loss: Optional[torch.FloatTensor] = None
+    sop_loss: Optional[torch.FloatTensor] = None
+    dec_mlm_loss: Optional[torch.FloatTensor] = None
+
     prediction_logits: Optional[torch.FloatTensor] = None
+    dec_prediction_logits: Optional[torch.FloatTensor] = None
     seq_relationship_logits: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -107,7 +114,7 @@ class NonCausalDecoder(nn.Module):
         self.decoder = BertEncoder(self.config)
         self.lm_predictions = BertLMPredictionHead(self.config)
 
-    def forward(self, hidden_states, attention_mask, head_mask=None, labels=None):
+    def forward(self, hidden_states, attention_mask, head_mask=None, labels=None, label_smoother_epsilon=0.0):
         batch_size, seq_length, _ = hidden_states.shape
 
         if attention_mask is None:
@@ -127,7 +134,10 @@ class NonCausalDecoder(nn.Module):
         loss = None
 
         if labels is not None:
-            loss_fct = CrossEntropyLoss()
+            if label_smoother_epsilon != 0:
+                loss_fct = LabelSmoother(epsilon=label_smoother_epsilon, ignore_index=-100)
+            else:
+                loss_fct = CrossEntropyLoss(ignore_index=-100)
             loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         return loss, logits
@@ -180,7 +190,8 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
-            mask_token_id=None
+            mask_token_id=None,
+            label_smoother_epsilon=0.0,
     ):
         assert mask_token_id is not None, f"Require `mask_token_id`"
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
@@ -204,19 +215,26 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             return_dict=return_dict,
         )
 
-        loss = prediction_logits = seq_relationship_logits = None
-        loss_fct = CrossEntropyLoss() if cal_mlm_loss or cal_nsp_loss else None
+        loss = mlm_loss = sop_loss = dec_mlm_loss = None
+        prediction_logits = dec_prediction_logits = seq_relationship_logits = None
+
+        if label_smoother_epsilon != 0:
+            loss_fct = LabelSmoother(epsilon=label_smoother_epsilon, ignore_index=-100)
+        else:
+            loss_fct = CrossEntropyLoss(ignore_index=-100)
 
         if cal_mlm_loss:
             prediction_logits = self.lm_predictions(outputs.last_hidden_state)
-            masked_lm_loss = loss_fct(prediction_logits.view(-1, self.config.vocab_size), labels.view(-1))
-            loss = masked_lm_loss
+            labels_ = labels.clone()
+            labels_[input_ids != mask_token_id] = -100
+            mlm_loss = loss_fct(prediction_logits.view(-1, self.config.vocab_size), labels_.view(-1))
+            loss = mlm_loss
 
         if cal_nsp_loss:
             prompt_hiddens = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
             seq_relationship_logits = self.seq_relationship(prompt_hiddens)
-            next_sentence_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
-            loss = next_sentence_loss if (loss is None) else loss + next_sentence_loss
+            sop_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
+            loss = sop_loss if (loss is None) else loss + sop_loss
 
         # Second pass: mlm_loss
         if cal_mlm_loss:
@@ -225,27 +243,31 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             dummy_input_ids[torch.where(real_token_mask)] = mask_token_id
 
             dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
-
             inputs_embeds = (
                     self.prompt_proj(outputs.last_hidden_state) * prompt_type_ids.float().unsqueeze(-1)
                     + dummy_embeds * (1 - prompt_type_ids).float().unsqueeze(-1)
             )
 
-            dec_mlm_loss, _ = self.non_casual_decoder.forward(
+            dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
                 hidden_states=inputs_embeds,
                 attention_mask=attention_mask,
-                head_mask=head_mask, labels=labels
+                head_mask=head_mask,
+                labels=labels,
+                label_smoother_epsilon=label_smoother_epsilon
             )
-
-            loss = loss + dec_mlm_loss
+            loss = dec_mlm_loss if (loss is None) else loss + dec_mlm_loss
 
         if not return_dict:
             output = (prediction_logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
+            return ((loss, mlm_loss, sop_loss, dec_mlm_loss) + output) if loss is not None else output
 
         return LogLMForPreTrainingOutput(
             loss=loss,
+            mlm_loss=mlm_loss,
+            sop_loss=sop_loss,
+            dec_mlm_loss=dec_mlm_loss,
             prediction_logits=prediction_logits,
+            dec_prediction_logits=dec_prediction_logits,
             seq_relationship_logits=seq_relationship_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,

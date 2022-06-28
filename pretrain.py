@@ -3,18 +3,18 @@ Author: Da Ma
 Date: 2022.01.07
 Description: pre-training launcher
 """
+import glob
 import json
 import logging
-import os
-from typing import Optional
+from os.path import join, split
+from typing import Optional, List
 
 import torch
 from dataclasses import dataclass, field
 from transformers import TrainingArguments, HfArgumentParser, set_seed
 
-from dataset import JsonLineLargeDataset
 from model import LogLMTokenizer, LogLMConfig, LogLMForPreTraining
-from trainer import PlmTrainer
+from trainer import LogLMTrainer
 from utils import get_logger, is_main_process
 
 
@@ -22,8 +22,20 @@ from utils import get_logger, is_main_process
 class DataArguments:
     trainDataPath: str = field(metadata={"help": "training data path"})
     evalDataPath: str = field(metadata={"help": "evaluation data path"})
+    num_examples_for_epoch: List[int] = field(metadata={"help": "Training example numbers of each epoch"})
     vocabPath: str = field(metadata={"help": "vocabulary path"})
     logPath: str = field(default=None, metadata={"help": "logger output path"})
+    train_file_pattern: str = field(default="epoch-*.pretrain.data.shuf")
+    dev_file_pattern: str = field(default="dev.data")
+
+    @property
+    def train_data_files(self) -> List[str]:
+        train_data_files = glob.glob(join(self.trainDataPath, self.train_file_pattern))
+        return sorted(train_data_files, key=lambda x: int(split(x)[-1].split(".")[0][6:]))
+
+    @property
+    def eval_data_file(self) -> str:
+        return join(self.evalDataPath, self.dev_file_pattern)
 
 
 @dataclass
@@ -87,10 +99,10 @@ class ModelArguments:
     )
 
 
-def pretrain():
+def main(_args: List[str] = None):
     # ******************* Parse Arguments ******************* #
     parser = HfArgumentParser((TrainingArguments, DataArguments, ModelArguments))
-    trainingArgs, dataArgs, modelArgs = parser.parse_args_into_dataclasses()
+    trainingArgs, dataArgs, modelArgs = parser.parse_args_into_dataclasses(_args)
 
     # ******************* Logger ******************* #
     logging.basicConfig(level=logging.INFO if is_main_process(trainingArgs.local_rank) else logging.WARN)
@@ -115,9 +127,8 @@ def pretrain():
 
     # ******************* Preparation ******************* #
     tokenizer = LogLMTokenizer(dataArgs.vocabPath)
-    logger.info(f"Tokenizer: {len(tokenizer)}")
+    logger.info(f"[Tokenizer] {len(tokenizer)}")
 
-    # ============ Config ============ #
     config = LogLMConfig(
         vocab_size=len(tokenizer),
         hidden_size=modelArgs.hidden_size,
@@ -135,48 +146,30 @@ def pretrain():
         use_cache=modelArgs.use_cache,
         tasks=modelArgs.tasks,
     )
-
-    # ============ Model ============ #
     model = LogLMForPreTraining(config)
-    logger.info(f"Model: {sum(map(torch.numel, model.parameters()))} params")
+    logger.info(f"[Model] {sum(map(torch.numel, model.parameters()))} params")
 
     # ============ Datasets ============ #
     # train datasets configuration list construction
-    datasetConfigList = []
-    epochDataFiles = []
-    index = 0
-    for epochFile in sorted(os.listdir(dataArgs.trainDataPath), key=lambda x: int(x.split(".")[0][6:])):
-        if not epochFile.startswith("."):
-            epochPath = os.path.join(dataArgs.trainDataPath, epochFile)
-            epochDataFiles.append(epochPath)
-            index += 1
-
-    for index, epochDataFile in enumerate(epochDataFiles):
-        datasetConfigList.append({"dataFile": epochDataFile})
-
-    # evaluation dataset
-    files = []
-    for filename in sorted(os.listdir(dataArgs.evalDataPath)):
-        if not filename.startswith("."):
-            files.append(os.path.join(dataArgs.evalDataPath, filename))
-    evalDataset = JsonLineLargeDataset(files[0], files[1])
+    assert len(dataArgs.train_data_files) >= trainingArgs.num_train_epochs
+    for train_data_file in dataArgs.train_data_files:
+        logger.info(f"[Train data]: {train_data_file}")
 
     # ============ Trainer ============ #
-    trainer = PlmTrainer(
+    trainer = LogLMTrainer(
         model=model,
         args=trainingArgs,
-        datasetType=JsonLineLargeDataset,
-        epochDatasetConfigList=datasetConfigList,
-        logPath=logPath,
-        eval_dataset=evalDataset,
         tokenizer=tokenizer,
-        data_collator=collate_func,
+        train_data_files=dataArgs.train_data_files,
+        eval_data_file=dataArgs.eval_data_file,
+        num_examples_for_epoch=dataArgs.num_examples_for_epoch,
+        log_path=logPath,
     )
 
     # ******************* Train ******************* #
     logger.info("***** START PRE-TRAINING *****")
     resume_checkpoint = modelArgs.resume_checkpoint
-    if resume_checkpoint.lower() == "none":
+    if resume_checkpoint is None or resume_checkpoint.lower() == "none":
         resume_checkpoint = None
     trainer.train(resume_from_checkpoint=resume_checkpoint)
 
@@ -184,4 +177,4 @@ def pretrain():
 
 
 if __name__ == "__main__":
-    pretrain()
+    main()
