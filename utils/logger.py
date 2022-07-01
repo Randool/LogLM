@@ -17,7 +17,9 @@ def get_logger(logger_name: str, exp_dir: str = None, rank=-1, propagate=True):
 
     # Repeated calls to `addHandler` result in repeated log output
     if len(logger.handlers) == 0:
-        formatter = logging.Formatter(fmt="[%(asctime)s] %(levelname)s - %(message)s", datefmt="%m-%d %H:%M:%S")
+        fmt = "[%(asctime)s] %(levelname)s - %(message)s"
+        formatter = logging.Formatter(fmt=fmt, datefmt="%m-%d %H:%M:%S")
+
         if exp_dir is None:
             handler = logging.StreamHandler()
             handler.setFormatter(formatter)

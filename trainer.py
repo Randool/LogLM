@@ -6,6 +6,7 @@
 @Version     :  1.0
 @Description :  None
 """
+import logging
 import math
 import os
 import sys
@@ -28,7 +29,7 @@ from transformers.trainer_utils import get_last_checkpoint, TrainOutput, has_len
 
 from dataset import DatasetForShuffledFile
 from model import LogLMTokenizer, LogLMForPreTraining
-from utils import LoggerCallback, get_logger
+from utils import LoggerCallback
 
 # Name of the files used for checkpointing
 WEIGHTS_NAME = "pytorch_model.bin"
@@ -50,40 +51,38 @@ class LogLMTrainer(Trainer):
             train_data_files: List[str],
             eval_data_file: str,
             num_examples_for_epoch: List[int],
-            log_path: str = None
+            logger: logging.Logger = None,
     ):
         assert len(train_data_files) == len(num_examples_for_epoch), \
             f"Length mismatch. $1={len(train_data_files)}, $2={len(num_examples_for_epoch)}"
 
-        self.logger = get_logger(__name__, log_path, args.local_rank, False)
-
-        super().__init__(model, args=args, tokenizer=tokenizer, callbacks=[LoggerCallback(self.logger)])
-
         self.train_data_files = train_data_files
         self.num_examples_for_epoch = num_examples_for_epoch
-        self.total_training_steps = self._get_total_training_steps()
-
         self.epoch_idx = 0
+
         self.train_dataset = DatasetForShuffledFile(train_data_files[self.epoch_idx],
-                                                    mask_token_id=self.tokenizer.mask_token_id,
-                                                    pad_token_id=self.tokenizer.pad_token_id,
+                                                    mask_token_id=tokenizer.mask_token_id,
+                                                    pad_token_id=tokenizer.pad_token_id,
                                                     num_examples=num_examples_for_epoch[self.epoch_idx])
-        self.eval_dataset = DatasetForShuffledFile(eval_data_file, mask_token_id=self.tokenizer.mask_token_id,
-                                                   pad_token_id=self.tokenizer.pad_token_id)
-        self.data_collator = self.train_dataset.collate_fn
+        self.eval_dataset = DatasetForShuffledFile(eval_data_file,
+                                                   mask_token_id=tokenizer.mask_token_id,
+                                                   pad_token_id=tokenizer.pad_token_id)
+
+        self.logger = logger if logger else logging.getLogger(__name__)
+
+        super().__init__(
+            model=model,
+            args=args,
+            data_collator=self.train_dataset.collate_fn,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            tokenizer=tokenizer,
+            callbacks=[LoggerCallback(self.logger)],
+        )
 
         self.label_names = ["labels", "sentence_pair_label"]
+        self.loss_names = ["loss", "mlm_loss", "sop_loss", "dec_mlm_loss"]
         self.logits_names = ["prediction_logits", "dec_prediction_logits", "seq_relationship_logits"]
-
-    def _get_total_training_steps(self):
-        trainingSteps = []
-        for i, epoch_file in enumerate(self.train_data_files):
-            self.train_dataset = DatasetForShuffledFile(epoch_file, mask_token_id=self.tokenizer.mask_token_id,
-                                                        pad_token_id=self.tokenizer.pad_token_id,
-                                                        num_examples=self.num_examples_for_epoch[i])
-            train_dataloader = self.get_train_dataloader()
-            trainingSteps.append(len(train_dataloader) // self.args.gradient_accumulation_steps)
-        return trainingSteps
 
     def get_train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -627,7 +626,7 @@ class LogLMTrainer(Trainer):
         self.callback_handler.eval_dataloader = dataloader
 
         observed_num_examples = 0
-        loss_sum = 0
+        loss_sum, mlm_loss_sum, sop_loss_sum, dec_mlm_loss_sum = 0, 0, 0, 0
         mlm_acc_sum, dec_mlm_acc_sum, sop_acc_sum = 0, 0, 0
 
         for inputs in dataloader:
@@ -636,8 +635,13 @@ class LogLMTrainer(Trainer):
                 observed_num_examples += observed_batch_size
 
             # Prediction step
-            loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            losses, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            loss, mlm_loss, sop_loss, dec_mlm_loss = losses
+
             loss_sum += loss.sum().item()
+            mlm_loss_sum += mlm_loss.sum().item()
+            sop_loss_sum += sop_loss.sum().item()
+            dec_mlm_loss_sum += dec_mlm_loss.sum().item()
 
             # Compute Metrics
             (mlm_logits, dec_mlm_logits, sop_logits), (mlm_labels, sop_labels) = logits, labels
@@ -656,9 +660,11 @@ class LogLMTrainer(Trainer):
             dec_mlm_acc_sum += dec_mlm_acc.item()
             sop_acc_sum += sop_acc.item()
 
-        # To be JSON-serializable, we need to remove numpy types or zero-d tensors
         metrics = {
             f"{metric_key_prefix}_loss": loss_sum / observed_num_examples,
+            f"{metric_key_prefix}_mlm_loss": mlm_loss_sum / observed_num_examples,
+            f"{metric_key_prefix}_sop_loss": sop_loss_sum / observed_num_examples,
+            f"{metric_key_prefix}_dec_mlm_loss": dec_mlm_loss_sum / observed_num_examples,
             f"{metric_key_prefix}_mlm_acc": mlm_acc_sum / observed_num_examples,
             f"{metric_key_prefix}_dec_mlm_acc": dec_mlm_acc_sum / observed_num_examples,
             f"{metric_key_prefix}_sop_acc": sop_acc_sum / observed_num_examples,
@@ -687,11 +693,12 @@ class LogLMTrainer(Trainer):
         with torch.no_grad():
             if has_labels:
                 with self.autocast_smart_context_manager():
-                    loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                loss = loss.mean().detach()
+                    _loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                # loss = loss.mean().detach()
+                losses = tuple(v.mean().detach() for k, v in outputs.items() if k in self.loss_names)
                 logits = tuple(v for k, v in outputs.items() if k in self.logits_names)
             else:
-                loss = None
+                losses = None
                 with self.autocast_smart_context_manager():
                     outputs = model(**inputs, return_dict=True)
                 logits = tuple(v for k, v in outputs.items() if k in self.logits_names)
@@ -700,10 +707,10 @@ class LogLMTrainer(Trainer):
                     self._past = outputs[self.args.past_index - 1]
 
         if prediction_loss_only:
-            return loss, None, None
+            return losses, None, None
 
         logits = nested_detach(logits)
         if len(logits) == 1:
             logits = logits[0]
 
-        return loss, logits, labels
+        return losses, logits, labels

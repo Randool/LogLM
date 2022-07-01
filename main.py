@@ -5,7 +5,6 @@ Description: pre-training launcher
 """
 import glob
 import json
-import logging
 from os.path import join, split
 from typing import Optional, List
 
@@ -15,7 +14,7 @@ from transformers import TrainingArguments, HfArgumentParser, set_seed
 
 from model import LogLMTokenizer, LogLMConfig, LogLMForPreTraining
 from trainer import LogLMTrainer
-from utils import get_logger, is_main_process
+from utils import get_logger
 
 
 @dataclass
@@ -97,6 +96,10 @@ class ModelArguments:
         metadata={"help": "Whether or not the model should return the last "
                           "key/values attentions (not used by all models)"},
     )
+    num_non_casual_decoder_layers: Optional[int] = field(default=3,
+                                                         metadata={"help": "Layers number of non-casual decoder"})
+    num_casual_decoder_layers: Optional[int] = field(default=3,
+                                                     metadata={"help": "Layers number of casual decoder"})
 
 
 def main(_args: List[str] = None):
@@ -105,16 +108,21 @@ def main(_args: List[str] = None):
     trainingArgs, dataArgs, modelArgs = parser.parse_args_into_dataclasses(_args)
 
     # ******************* Logger ******************* #
-    logging.basicConfig(level=logging.INFO if is_main_process(trainingArgs.local_rank) else logging.WARN)
+    log_path = dataArgs.logPath
+    if log_path is None or log_path.lower() == "none":
+        log_path = None
 
-    logPath = dataArgs.logPath
-    if logPath is None or logPath.lower() == "none":
-        logPath = None
+    # `torch.distributed.init_process_group` is called in `TrainingArguments`
+    global_rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else -1
+    logger = get_logger(__name__, log_path, global_rank, propagate=False)
 
-    logger = get_logger(__name__, logPath, trainingArgs.local_rank)
+    for _log_name, _logger in logger.manager.loggerDict.items():
+        if _log_name.startswith("transformers.trainer"):
+            _logger.addHandler(logger.handlers[0])
+
     logger.warning(
-        f"Process rank: {trainingArgs.local_rank}, device: {trainingArgs.device}, n_gpu: {trainingArgs.n_gpu}, "
-        + f"distributed training: {bool(trainingArgs.local_rank != -1)}"
+        f"Global rank: {global_rank}, Process rank: {trainingArgs.local_rank}, device: {trainingArgs.device}, "
+        f"n_gpu: {trainingArgs.n_gpu}, distributed training: {bool(trainingArgs.local_rank != -1)}"
     )
 
     # arguments
@@ -142,9 +150,11 @@ def main(_args: List[str] = None):
         type_vocab_size=modelArgs.type_vocab_size,
         initializer_range=modelArgs.initializer_range,
         layer_norm_eps=modelArgs.layer_norm_eps,
+        pad_token_id=tokenizer.pad_token_id,
         position_embedding_type=modelArgs.position_embedding_type,
         use_cache=modelArgs.use_cache,
-        tasks=modelArgs.tasks,
+        num_non_casual_decoder_layers=modelArgs.num_non_casual_decoder_layers,
+        num_casual_decoder_layers=modelArgs.num_casual_decoder_layers,
     )
     model = LogLMForPreTraining(config)
     logger.info(f"[Model] {sum(map(torch.numel, model.parameters()))} params")
@@ -163,7 +173,7 @@ def main(_args: List[str] = None):
         train_data_files=dataArgs.train_data_files,
         eval_data_file=dataArgs.eval_data_file,
         num_examples_for_epoch=dataArgs.num_examples_for_epoch,
-        log_path=logPath,
+        logger=logger
     )
 
     # ******************* Train ******************* #

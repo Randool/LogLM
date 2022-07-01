@@ -6,6 +6,7 @@
 @Version     :  1.0
 """
 import copy
+import warnings
 from collections import namedtuple
 from typing import List
 
@@ -58,6 +59,8 @@ class DatasetForShuffledFile(IterableDataset):
     def __len__(self):
         if self.num_examples:
             return self.num_examples
+        warnings.warn(f"Counting `num_examples` on {self.data_file}, which is time consuming...")
+        self.num_examples = 0
         with open(self.data_file) as f:
             for _ in f:
                 self.num_examples += 1
