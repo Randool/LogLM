@@ -5,28 +5,19 @@
 # - MASTER_PORT
 # - MODEL_SIZE= tiny | base | large
 # - nproc_per_node
+# - PER_DEVICE_TRAIN_BATCH_SIZE
+# - PER_DEVICE_EVAL_BATCH_SIZE
+# - GRADIENT_ACCUMULATION_STEPS
+# - EVAL_ACCUMULATION_STEPS
 
 legal=true
 
-if [ -z ${MASTER_HOST} ]; then
-  echo "No MASTER_HOST"
-  legal=false
-fi
-
-if [ -z ${MASTER_PORT} ]; then
-  echo "No MASTER_HOST"
-  legal=false
-fi
-
-if [ -z ${MODEL_SIZE} ]; then
-  echo "No MODEL_SIZE"
-  legal=false
-fi
-
-if [ -z ${nproc_per_node} ]; then
-  echo "No nproc_per_node"
-  legal=false
-fi
+for slot in MASTER_HOST MASTER_PORT MODEL_SIZE nproc_per_node PER_DEVICE_TRAIN_BATCH_SIZE PER_DEVICE_EVAL_BATCH_SIZE GRADIENT_ACCUMULATION_STEPS EVAL_ACCUMULATION_STEPS; do
+  if [ -z ${slot} ]; then
+    echo "No ${slot}"
+    legal=false
+  fi
+done
 
 if [[ ${legal} == false ]]; then
   exit -1
@@ -46,10 +37,10 @@ VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
 
 # ==== training hyperparameters ==== #
 LEARNING_RATE=1e-4
-PER_DEVICE_TRAIN_BATCH_SIZE=16
-PER_DEVICE_EVAL_BATCH_SIZE=16
-GRADIENT_ACCUMULATION_STEPS=2
-EVAL_ACCUMULATION_STEPS=2
+#PER_DEVICE_TRAIN_BATCH_SIZE=16
+#PER_DEVICE_EVAL_BATCH_SIZE=16
+#GRADIENT_ACCUMULATION_STEPS=2
+#EVAL_ACCUMULATION_STEPS=2
 WEIGHT_DECAY=0.01
 MAX_STEPS=1000000
 NUM_TRAIN_EPOCHS=10

@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=dist_launch
 #SBATCH --partition=a10
-#SBATCH --nodes=2
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=18
 #SBATCH --gres=gpu:4
-#SBATCH --mem=16G
+#SBATCH --mem=20G
 #SBATCH --output=./dist_launch-%A.log
 #SBATCH --error=./dist_launch-%A.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]
@@ -18,7 +18,19 @@ echo "NODELIST=${SLURM_NODELIST}, MASTER_HOST: ${MASTER_HOST}, MASTER_PORT: ${MA
 
 export MASTER_HOST
 export MASTER_PORT
+
+#export MODEL_SIZE=tiny
+#export nproc_per_node=4
+#export PER_DEVICE_TRAIN_BATCH_SIZE=128
+#export PER_DEVICE_EVAL_BATCH_SIZE=128
+#export GRADIENT_ACCUMULATION_STEPS=1
+#export EVAL_ACCUMULATION_STEPS=1
+
 export MODEL_SIZE=base
 export nproc_per_node=4
+export PER_DEVICE_TRAIN_BATCH_SIZE=32
+export PER_DEVICE_EVAL_BATCH_SIZE=32
+export GRADIENT_ACCUMULATION_STEPS=2
+export EVAL_ACCUMULATION_STEPS=1
 
 srun ./dist_run.sh
