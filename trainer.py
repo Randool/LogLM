@@ -625,7 +625,7 @@ class LogLMTrainer(Trainer):
 
         self.callback_handler.eval_dataloader = dataloader
 
-        observed_num_examples = 0
+        observed_num_examples, steps = 0, 1e-8
         loss_sum, mlm_loss_sum, sop_loss_sum, dec_mlm_loss_sum = 0, 0, 0, 0
         mlm_acc_sum, dec_mlm_acc_sum, sop_acc_sum = 0, 0, 0
 
@@ -633,6 +633,7 @@ class LogLMTrainer(Trainer):
             observed_batch_size = inputs["input_ids"].shape[0]
             if observed_batch_size is not None:
                 observed_num_examples += observed_batch_size
+            steps += 1
 
             # Prediction step
             losses, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
@@ -661,13 +662,13 @@ class LogLMTrainer(Trainer):
             sop_acc_sum += sop_acc.item()
 
         metrics = {
-            f"{metric_key_prefix}_loss": loss_sum / observed_num_examples,
-            f"{metric_key_prefix}_mlm_loss": mlm_loss_sum / observed_num_examples,
-            f"{metric_key_prefix}_sop_loss": sop_loss_sum / observed_num_examples,
-            f"{metric_key_prefix}_dec_mlm_loss": dec_mlm_loss_sum / observed_num_examples,
-            f"{metric_key_prefix}_mlm_acc": mlm_acc_sum / observed_num_examples,
-            f"{metric_key_prefix}_dec_mlm_acc": dec_mlm_acc_sum / observed_num_examples,
-            f"{metric_key_prefix}_sop_acc": sop_acc_sum / observed_num_examples,
+            f"{metric_key_prefix}_loss": loss_sum / steps,
+            f"{metric_key_prefix}_mlm_loss": mlm_loss_sum / steps,
+            f"{metric_key_prefix}_sop_loss": sop_loss_sum / steps,
+            f"{metric_key_prefix}_dec_mlm_loss": dec_mlm_loss_sum / steps,
+            f"{metric_key_prefix}_mlm_acc": mlm_acc_sum / steps,
+            f"{metric_key_prefix}_dec_mlm_acc": dec_mlm_acc_sum / steps,
+            f"{metric_key_prefix}_sop_acc": sop_acc_sum / steps,
         }
 
         return EvalLoopOutput(predictions=None, label_ids=None, metrics=metrics, num_samples=observed_num_examples)
