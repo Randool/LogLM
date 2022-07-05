@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=dist_launch
 #SBATCH --partition=a10
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=18
 #SBATCH --gres=gpu:4
@@ -32,5 +32,7 @@ export PER_DEVICE_TRAIN_BATCH_SIZE=32
 export PER_DEVICE_EVAL_BATCH_SIZE=32
 export GRADIENT_ACCUMULATION_STEPS=2
 export EVAL_ACCUMULATION_STEPS=1
+
+export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-100000
 
 srun ./dist_run.sh

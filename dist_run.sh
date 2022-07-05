@@ -61,7 +61,9 @@ OUTPUT_DIR="${CORPUS_PATH}/ckpts/${MODEL_SIZE}"
 LOG_PATH="${OUTPUT_DIR}/log" # None means output to the stdout
 TENSORBOARD_LOG_PATH="${OUTPUT_DIR}/tensorboard"
 
-RESUME_CHECKPOINT_PATH=None
+if [ -z ${RESUME_CHECKPOINT_PATH} ]; then
+  RESUME_CHECKPOINT_PATH=None
+fi
 
 # *************************************************** #
 if [[ ${MODEL_SIZE} == 'tiny' ]]; then
