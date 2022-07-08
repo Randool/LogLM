@@ -97,6 +97,8 @@ class LogLMForPreTrainingOutput(ModelOutput):
 
 
 class LogLMPreTrainedModel(BertPreTrainedModel):
+    config_class = LogLMConfig
+
     def resize_position_embeddings(self, new_num_position_embeddings: int):
         pass
 
@@ -161,8 +163,8 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         self.bert = BertModel(config, add_pooling_layer=False)
         self.prompt_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
 
-        self.non_casual_decoder = NonCausalDecoder(config)
-        self.casual_decoder = CausalDecoder(config)
+        self.non_casual_decoder = NonCausalDecoder(config) if config.num_non_casual_decoder_layers > 0 else None
+        self.casual_decoder = CausalDecoder(config) if config.num_casual_decoder_layers > 0 else None
 
         self.lm_predictions = BertLMPredictionHead(config)
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
@@ -237,7 +239,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             loss = sop_loss if (loss is None) else loss + sop_loss
 
         # Second pass: mlm_loss
-        if cal_mlm_loss:
+        if cal_mlm_loss and (self.non_casual_decoder is not None):
             real_token_mask = prompt_type_ids ^ attention_mask.bool()  # F, F, T, T, ..., T[, F, F]
             dummy_input_ids = torch.zeros_like(input_ids)
             dummy_input_ids[torch.where(real_token_mask)] = mask_token_id

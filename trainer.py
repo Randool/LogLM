@@ -291,8 +291,7 @@ class LogLMTrainer(Trainer):
         self.logger.info(f"  Num examples = {num_examples}")
         self.logger.info(f"  Num Epochs = {num_train_epochs}")
         self.logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
-        self.logger.info(
-            f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size}")
+        self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size}")
         self.logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
         self.logger.info(f"  Total optimization steps = {max_steps}")
 
@@ -626,8 +625,8 @@ class LogLMTrainer(Trainer):
         self.callback_handler.eval_dataloader = dataloader
 
         observed_num_examples, steps = 0, 1e-8
-        loss_sum, mlm_loss_sum, sop_loss_sum, dec_mlm_loss_sum = 0, 0, 0, 0
-        mlm_acc_sum, dec_mlm_acc_sum, sop_acc_sum = 0, 0, 0
+        loss_sum = mlm_loss_sum = sop_loss_sum = dec_mlm_loss_sum = 0
+        mlm_acc_sum = dec_mlm_acc_sum = sop_acc_sum = 0
 
         for inputs in dataloader:
             observed_batch_size = inputs["input_ids"].shape[0]
@@ -637,28 +636,29 @@ class LogLMTrainer(Trainer):
 
             # Prediction step
             losses, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
-            loss, mlm_loss, sop_loss, dec_mlm_loss = losses
 
-            loss_sum += loss.sum().item()
-            mlm_loss_sum += mlm_loss.sum().item()
-            sop_loss_sum += sop_loss.sum().item()
-            dec_mlm_loss_sum += dec_mlm_loss.sum().item()
+            loss_sum += losses["loss"].sum().item() if "loss" in losses else 0
+            mlm_loss_sum += losses["mlm_loss"].sum().item() if "mlm_loss" in losses else 0
+            sop_loss_sum += losses["sop_loss"].sum().item() if "sop_loss" in losses else 0
+            dec_mlm_loss_sum += losses["dec_mlm_loss"].sum().item() if "dec_mlm_loss" in losses else 0
 
             # Compute Metrics
-            (mlm_logits, dec_mlm_logits, sop_logits), (mlm_labels, sop_labels) = logits, labels
+            mlm_labels, sop_labels = labels
             mask_ids = inputs["input_ids"].eq(inputs["mask_token_id"])
             dec_mask = mlm_labels.ne(-100)
 
-            mlm_pred = mlm_logits.argmax(dim=-1)
-            dec_mlm_pred = dec_mlm_logits.argmax(dim=-1)
-            sop_pred = sop_logits.argmax(dim=-1)
-
+            # self.logits_names = ["prediction_logits", "dec_prediction_logits", "seq_relationship_logits"]
+            mlm_pred = logits["prediction_logits"].argmax(dim=-1)
             mlm_acc = mlm_pred[mask_ids].eq(mlm_labels[mask_ids]).sum() / mask_ids.sum()
-            dec_mlm_acc = dec_mlm_pred[dec_mask].eq(mlm_labels[dec_mask]).sum() / dec_mask.sum()
-            sop_acc = sop_pred.eq(sop_labels).sum() / len(sop_labels)
-
             mlm_acc_sum += mlm_acc.item()
-            dec_mlm_acc_sum += dec_mlm_acc.item()
+
+            if "dec_prediction_logits" in logits:
+                dec_mlm_pred = logits["dec_prediction_logits"].argmax(dim=-1)
+                dec_mlm_acc = dec_mlm_pred[dec_mask].eq(mlm_labels[dec_mask]).sum() / dec_mask.sum()
+                dec_mlm_acc_sum += dec_mlm_acc.item()
+
+            sop_pred = logits["seq_relationship_logits"].argmax(dim=-1)
+            sop_acc = sop_pred.eq(sop_labels).sum() / len(sop_labels)
             sop_acc_sum += sop_acc.item()
 
         metrics = {
@@ -679,7 +679,7 @@ class LogLMTrainer(Trainer):
             inputs: Dict[str, Union[torch.Tensor, Any]],
             prediction_loss_only: bool = None,
             ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], Optional[torch.Tensor]]:
         has_labels = all(inputs.get(k) is not None for k in self.label_names)
         inputs = self._prepare_inputs(inputs)
 
@@ -695,23 +695,18 @@ class LogLMTrainer(Trainer):
             if has_labels:
                 with self.autocast_smart_context_manager():
                     _loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
-                # loss = loss.mean().detach()
-                losses = tuple(v.mean().detach() for k, v in outputs.items() if k in self.loss_names)
-                logits = tuple(v for k, v in outputs.items() if k in self.logits_names)
+                losses = {k: v.mean().detach() for k, v in outputs.items() if k in self.loss_names}
+                logits = {k: v.detach() for k, v in outputs.items() if k in self.logits_names}
             else:
                 losses = None
                 with self.autocast_smart_context_manager():
                     outputs = model(**inputs, return_dict=True)
-                logits = tuple(v for k, v in outputs.items() if k in self.logits_names)
+                logits = {k: v.detach() for k, v in outputs.items() if k in self.logits_names}
 
                 if self.args.past_index >= 0:
                     self._past = outputs[self.args.past_index - 1]
 
         if prediction_loss_only:
-            return losses, None, None
-
-        logits = nested_detach(logits)
-        if len(logits) == 1:
-            logits = logits[0]
+            return losses, logits, None
 
         return losses, logits, labels

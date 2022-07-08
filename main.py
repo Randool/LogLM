@@ -1,7 +1,10 @@
 """
-Author: Da Ma
-Date: 2022.01.07
-Description: pre-training launcher
+@File        :  main.py
+@Contact     :  randool@sjtu.edu.cn
+@Author      :  Randool
+@Create Time :  2022/6/27
+@Version     :  1.0
+@Description :  None
 """
 import glob
 import json
@@ -161,7 +164,7 @@ def main(_args: List[str] = None):
 
     # ============ Datasets ============ #
     # train datasets configuration list construction
-    assert len(dataArgs.train_data_files) >= trainingArgs.num_train_epochs
+    # assert len(dataArgs.train_data_files) >= trainingArgs.num_train_epochs
     for train_data_file in dataArgs.train_data_files:
         logger.info(f"[Train data]: {train_data_file}")
 
