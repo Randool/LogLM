@@ -116,7 +116,7 @@ class NonCausalDecoder(nn.Module):
         self.decoder = BertEncoder(self.config)
         self.lm_predictions = BertLMPredictionHead(self.config)
 
-    def forward(self, hidden_states, attention_mask, head_mask=None, labels=None, label_smoother_epsilon=0.0):
+    def forward(self, hidden_states, attention_mask, head_mask=None, labels=None):
         batch_size, seq_length, _ = hidden_states.shape
 
         if attention_mask is None:
@@ -136,10 +136,7 @@ class NonCausalDecoder(nn.Module):
         loss = None
 
         if labels is not None:
-            if label_smoother_epsilon != 0:
-                loss_fct = LabelSmoother(epsilon=label_smoother_epsilon, ignore_index=-100)
-            else:
-                loss_fct = CrossEntropyLoss(ignore_index=-100)
+            loss_fct = CrossEntropyLoss(ignore_index=-100)
             loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
         return loss, logits
@@ -193,7 +190,6 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             output_hidden_states=None,
             return_dict=None,
             mask_token_id=None,
-            label_smoother_epsilon=0.0,
     ):
         assert mask_token_id is not None, f"Require `mask_token_id`"
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
@@ -220,10 +216,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         loss = mlm_loss = sop_loss = dec_mlm_loss = None
         prediction_logits = dec_prediction_logits = seq_relationship_logits = None
 
-        if label_smoother_epsilon != 0:
-            loss_fct = LabelSmoother(epsilon=label_smoother_epsilon, ignore_index=-100)
-        else:
-            loss_fct = CrossEntropyLoss(ignore_index=-100)
+        loss_fct = CrossEntropyLoss(ignore_index=-100)
 
         if cal_mlm_loss:
             prediction_logits = self.lm_predictions(outputs.last_hidden_state)
@@ -255,7 +248,6 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 labels=labels,
-                label_smoother_epsilon=label_smoother_epsilon
             )
             loss = dec_mlm_loss if (loss is None) else loss + dec_mlm_loss
 

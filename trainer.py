@@ -540,7 +540,7 @@ class LogLMTrainer(Trainer):
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
     def compute_loss(self, model: LogLMForPreTraining, inputs, return_outputs=False):
-        outputs = model.forward(**inputs, return_dict=True, label_smoother_epsilon=self.args.label_smoothing_factor)
+        outputs = model.forward(**inputs, return_dict=True)
         loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
         return (loss, outputs) if return_outputs else loss
 

@@ -25,6 +25,7 @@ MAX_PRED_PER_SEQ=40
 MAX_SEQ_LEN=128
 EPOCH=10
 SEED=42
+NUM_WORKERS=30
 
 MERGE='true' # true | false
 SHUFFLE='true' # true | false
@@ -59,7 +60,7 @@ if [[ ${phase} -le 2 ]]; then
         --WWM \
         --inputPath         ${NORMALIZED_TRAIN} \
         --outputPath        ${PROCESSED_TRAIN} \
-        --processNum        30 \
+        --processNum        ${NUM_WORKERS} \
         --maskRatio         0.15 \
         --logPath           "${DATA_PATH}/logs" \
         --seed              ${SEED}
@@ -75,7 +76,7 @@ if [[ ${phase} -le 2 ]]; then
         --WWM \
         --inputPath         ${NORMALIZED_DEV} \
         --outputPath        ${PROCESSED_DEV} \
-        --processNum        30 \
+        --processNum        ${NUM_WORKERS} \
         --maskRatio         0.15 \
         --logPath           "${DATA_PATH}/logs" \
         --seed              ${SEED}
