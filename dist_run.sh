@@ -97,6 +97,7 @@ python -um torch.distributed.launch \
     --master_addr     ${MASTER_HOST} \
     --master_port     ${MASTER_PORT} \
 main.py \
+    --seed                          ${SEED} \
     --trainDataPath                 ${TRAIN_DATA_PATH} \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \

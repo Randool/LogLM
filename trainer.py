@@ -322,7 +322,7 @@ class LogLMTrainer(Trainer):
                     "batches in the first epoch. If this takes a lot of time, you can add the `--ignore_data_skip` "
                     "flag to your launch command, but you will resume the training on data already seen by your model."
                 )
-                if self.is_local_process_zero() and not args.disable_tqdm:
+                if self.is_world_process_zero() and not args.disable_tqdm:
                     steps_trained_progress_bar = tqdm(total=steps_trained_in_current_epoch)
                     steps_trained_progress_bar.set_description("Skipping the first batches")
 
@@ -487,10 +487,11 @@ class LogLMTrainer(Trainer):
             # Clean the state at the end of training
             delattr(self, "_past")
 
-        self.logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
+        self.logger.info("\n\nTraining completed.\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
             # Wait for everyone to get here, so we are sur the model has been saved by process 0.
-            dist.barrier()
+            if dist.is_initialized():
+                dist.barrier()
 
             self.logger.info(
                 f"Loading best model from {self.state.best_model_checkpoint} (score: {self.state.best_metric})."

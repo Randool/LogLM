@@ -18,8 +18,6 @@ from transformers.file_utils import ModelOutput
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.bert.modeling_bert import BertLMPredictionHead, BertEncoder
 
-from utils.label_smooth import LabelSmoother
-
 
 class LogLMConfig(BertConfig):
     model_type = "bert"
@@ -149,7 +147,7 @@ class CausalDecoder(nn.Module):
         # TODO: Implement
 
     def forward(self):
-        pass
+        raise NotImplementedError
 
 
 class LogLMForPreTraining(LogLMPreTrainedModel):
@@ -232,24 +230,32 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             loss = sop_loss if (loss is None) else loss + sop_loss
 
         # Second pass: mlm_loss
-        if cal_mlm_loss and (self.non_casual_decoder is not None):
-            real_token_mask = prompt_type_ids ^ attention_mask.bool()  # F, F, T, T, ..., T[, F, F]
-            dummy_input_ids = torch.zeros_like(input_ids)
-            dummy_input_ids[torch.where(real_token_mask)] = mask_token_id
+        if cal_mlm_loss:
+            if self.non_casual_decoder is not None:
+                real_token_mask = prompt_type_ids ^ attention_mask.bool()  # F, F, T, T, ..., T[, F, F]
+                dummy_input_ids = torch.zeros_like(prompt_type_ids, dtype=torch.long)
+                dummy_input_ids[torch.where(real_token_mask)] = mask_token_id
 
-            dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
-            inputs_embeds = (
-                    self.prompt_proj(outputs.last_hidden_state) * prompt_type_ids.float().unsqueeze(-1)
-                    + dummy_embeds * (1 - prompt_type_ids).float().unsqueeze(-1)
-            )
+                dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
 
-            dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
-                hidden_states=inputs_embeds,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                labels=labels,
-            )
-            loss = dec_mlm_loss if (loss is None) else loss + dec_mlm_loss
+                prompt_mask = prompt_type_ids.float().unsqueeze(-1)
+                inputs_embeds = (
+                        self.prompt_proj(outputs.last_hidden_state) * prompt_mask +
+                        dummy_embeds * (1 - prompt_mask)
+                )
+
+                dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
+                    hidden_states=inputs_embeds,
+                    attention_mask=attention_mask,
+                    head_mask=head_mask,
+                    labels=labels,
+                )
+                loss = dec_mlm_loss if (loss is None) else loss + dec_mlm_loss
+
+            if self.casual_decoder is not None:
+                # dec_lm_loss, dec_lm_prediction_logits = self.casual_decoder.forward()
+                # loss = dec_lm_loss if (loss is None) else loss + dec_lm_loss
+                pass  # TODO: Implement
 
         if not return_dict:
             output = (prediction_logits,) + outputs[2:]

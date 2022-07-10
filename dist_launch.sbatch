@@ -33,6 +33,8 @@ export PER_DEVICE_EVAL_BATCH_SIZE=32
 export GRADIENT_ACCUMULATION_STEPS=1
 export EVAL_ACCUMULATION_STEPS=1
 
-# export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-100000
+export SEED=42
+
+export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-50000
 
 srun ./dist_run.sh

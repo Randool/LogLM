@@ -5,7 +5,6 @@
 @Create Time :  2022/6/18
 @Version     :  1.0
 """
-import copy
 import warnings
 from collections import namedtuple
 from typing import List
@@ -41,7 +40,7 @@ class DatasetForShuffledFile(IterableDataset):
                 SO_label = int(SO_label)
 
                 # Recover `input_ids` from `labels` and `masked_pos`
-                input_ids = copy.deepcopy(labels)
+                input_ids = [id_ for id_ in labels]
                 for pos in masked_pos:
                     input_ids[pos] = self.mask_token_id
 
