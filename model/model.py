@@ -7,6 +7,7 @@
 @Description :  Bert with variable length of `[CLS]`
 """
 import copy
+import random
 from typing import Optional, Tuple, Union
 
 import torch
@@ -43,6 +44,7 @@ class LogLMConfig(BertConfig):
             shared_non_casual_decoder=False,
             num_non_casual_decoder_layers=3,
             num_casual_decoder_layers=3,
+            mask_prompt_prob=0.2,
             **kwargs
     ):
         super().__init__(
@@ -68,6 +70,7 @@ class LogLMConfig(BertConfig):
         self.shared_non_casual_decoder = shared_non_casual_decoder
         self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
         self.num_casual_decoder_layers = num_casual_decoder_layers
+        self.mask_prompt_prob = mask_prompt_prob
 
     def for_non_casual_decoder(self):
         config = copy.deepcopy(self)
@@ -229,6 +232,20 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
 
         loss_fct = CrossEntropyLoss(ignore_index=-100)
 
+        # Mask some positions (from back to front)
+        masked_prompt_mask = None
+
+        if cal_mlm_loss or cal_nsp_loss:
+            prompt_len = prompt_type_ids.sum(dim=-1)
+            if self.training and random.random() < self.config.mask_prompt_prob:
+                masked_prompt_mask = torch.zeros_like(prompt_type_ids, dtype=torch.float)
+                for idx, length in enumerate(prompt_len):
+                    reserved_length = random.randint(1, length)
+                    masked_prompt_mask[idx, :reserved_length] = 1
+            else:
+                masked_prompt_mask = prompt_type_ids.float()
+            masked_prompt_mask = masked_prompt_mask.unsqueeze(-1)
+
         if cal_mlm_loss:
             prediction_logits = self.lm_predictions(outputs.last_hidden_state)
             labels_ = labels.clone()
@@ -237,7 +254,9 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             loss = mlm_loss
 
         if cal_nsp_loss:
-            prompt_hiddens = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
+            masked_prompt_len = masked_prompt_mask.sum(dim=1)  # [B, 1]
+            prompt_hiddens = (outputs.last_hidden_state * masked_prompt_mask).sum(dim=1)  # [B, D]
+            prompt_hiddens = prompt_hiddens / masked_prompt_len
             seq_relationship_logits = self.seq_relationship(prompt_hiddens)
             sop_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
             loss = sop_loss if (loss is None) else loss + sop_loss
@@ -245,16 +264,13 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         # Second pass: mlm_loss
         if cal_mlm_loss:
             if self.non_casual_decoder is not None:
-                real_token_mask = prompt_type_ids ^ attention_mask.bool()  # F, F, T, T, ..., T[, F, F]
                 dummy_input_ids = torch.zeros_like(prompt_type_ids, dtype=torch.long)
-                dummy_input_ids[torch.where(real_token_mask)] = mask_token_id
-
+                dummy_input_ids[torch.where(attention_mask)] = mask_token_id
                 dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
 
-                prompt_mask = prompt_type_ids.float().unsqueeze(-1)
                 inputs_embeds = (
-                        self.prompt_proj(outputs.last_hidden_state) * prompt_mask +
-                        dummy_embeds * (1 - prompt_mask)
+                        self.prompt_proj(outputs.last_hidden_state) * masked_prompt_mask +
+                        dummy_embeds * (1 - masked_prompt_mask)
                 )
 
                 dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
