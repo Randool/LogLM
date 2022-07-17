@@ -23,7 +23,7 @@ PROCESSED_DEV="${DATA_PATH}/processed/dev"
 
 MAX_PRED_PER_SEQ=40
 MAX_SEQ_LEN=128
-EPOCH=10
+EPOCH=7
 SEED=42
 NUM_WORKERS=30
 
@@ -31,7 +31,7 @@ MERGE='true' # true | false
 SHUFFLE='true' # true | false
 RELEASE_CACHE='true' # true | false
 
-VOCAB_PATH="${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt"
+VOCAB_PATH="./tokenizer/vocab.txt"
 
 # Phase 1: Normalized and split train & dev
 if [[ ${phase} -le 1 ]]; then

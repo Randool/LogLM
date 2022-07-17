@@ -7,12 +7,56 @@
 @Description :  BertTokenizer with variable length of `[CLS]`
 """
 from itertools import chain
-from math import ceil, log2
-from typing import Optional, List, Union, Dict
+from math import ceil, log, floor
+from typing import Optional, List, Union, Dict, Tuple
 
 from transformers import BertTokenizer
 from transformers.file_utils import PaddingStrategy, TensorType
 from transformers.tokenization_utils_base import TruncationStrategy, BatchEncoding, EncodedInput
+
+
+class LogTruncation:
+    """ Find optimal truncated length using Newton's Method """
+
+    def __init__(self, log_base: int):
+        self.log_base = log_base
+        self.ln_base_inverse = 1 / log(log_base)
+
+    def _f(self, x: float, max_length: int) -> float:
+        return x + log(x, self.log_base) - max_length
+
+    def _f_derivative(self, x: float) -> float:
+        return 1 + self.ln_base_inverse / x
+
+    def get_prompt_len(self, len_ids: float, len_pair_ids: float) -> int:
+        return ceil(log(max(1.5, len_ids + len_pair_ids), self.log_base))
+
+    def truncated_length(
+            self, len_ids: int, len_pair_ids: int = None, max_length: int = None
+    ) -> Tuple[int, int, int]:
+        """ :returns: prompt_len, len_ids, len_pair_ids """
+        len_pair_ids = 0 if len_pair_ids is None else len_pair_ids
+        prompt_len = self.get_prompt_len(len_ids, len_pair_ids)
+
+        if not (max_length is None or prompt_len + len_ids + len_pair_ids <= max_length):
+            x = len_ids + len_pair_ids
+            x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
+            x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
+            x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
+
+            prompt_len = self.get_prompt_len(x, 0)
+            rest = max_length - prompt_len
+
+            # 分配长度给ids和pair_ids
+            if len_pair_ids == 0:
+                len_ids = rest
+            elif len_ids == 0:
+                len_pair_ids = rest
+            else:
+                s = len_ids + len_pair_ids
+                len_ids, len_pair_ids = floor(rest * len_ids / s), floor(rest * len_pair_ids / s)
+
+        return prompt_len, len_ids, len_pair_ids
 
 
 class LogLMTokenizer(BertTokenizer):
@@ -31,6 +75,7 @@ class LogLMTokenizer(BertTokenizer):
             mask_token="[MASK]",
             tokenize_chinese_chars=True,
             strip_accents=None,
+            log_base=2,
             **kwargs
     ):
         super().__init__(
@@ -52,6 +97,8 @@ class LogLMTokenizer(BertTokenizer):
             '[unused6]', '[unused7]', '[unused8]', '[unused9]', '[unused10]', '[unused11]'
         ]
         self.prompt_token_ids = [self._convert_token_to_id(t) for t in self.prompt_tokens]
+
+        self.log_truncation = LogTruncation(log_base)
 
     def _pad(
             self,
@@ -80,12 +127,6 @@ class LogLMTokenizer(BertTokenizer):
                     encoded_inputs["prompt_type_ids"] = [0] * difference + encoded_inputs["prompt_type_ids"]
 
         return encoded_inputs
-
-    @staticmethod
-    def _prompt_len(ids: List[int], pair_ids: Optional[List[int]] = None) -> int:
-        len_ids = len(ids)
-        len_pair_ids = 0 if pair_ids is None else len(pair_ids)
-        return ceil(log2(max(1, len_ids + len_pair_ids)))
 
     def prepare_for_model(
             self,
@@ -149,16 +190,22 @@ class LogLMTokenizer(BertTokenizer):
         encoded_inputs = {}
 
         # Compute the total size of the returned encodings
-        prompt_len = self._prompt_len(ids, pair_ids)
-        total_len = len_ids + len_pair_ids + prompt_len
+        prompt_len, _, _ = self.log_truncation.truncated_length(len_ids + 1,
+                                                                len_pair_ids + 1 if len_pair_ids > 0 else 0,
+                                                                max_length)
+        total_len = prompt_len + len_ids + len_pair_ids
 
         # Truncation: Handle max sequence length
         overflowing_tokens = []
         if truncation_strategy != TruncationStrategy.DO_NOT_TRUNCATE and max_length and total_len > max_length:
+            num_tokens_to_remove = total_len - max_length + 1   # [SEP]
+            if pair_ids:
+                num_tokens_to_remove += 1
+
             ids, pair_ids, overflowing_tokens = self.truncate_sequences(
                 ids,
                 pair_ids=pair_ids,
-                num_tokens_to_remove=total_len - max_length,
+                num_tokens_to_remove=num_tokens_to_remove,
                 truncation_strategy=truncation_strategy,
                 stride=stride,
             )
@@ -209,7 +256,8 @@ class LogLMTokenizer(BertTokenizer):
     def build_inputs_with_special_tokens(
             self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
     ) -> List[int]:
-        prompt_len = self._prompt_len(token_ids_0, token_ids_1)
+        prompt_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
+                                                                len(token_ids_1) + 1 if token_ids_1 else 0)
         sep = [self.sep_token_id]
 
         if token_ids_1 is None:
@@ -229,7 +277,8 @@ class LogLMTokenizer(BertTokenizer):
                 setattr(self, "special_tokens_ids", sp_ids)
             return [1 if _id in sp_ids else 0 for _id in chain(token_ids_0, [] if token_ids_1 is None else token_ids_1)]
 
-        prompt_len = self._prompt_len(token_ids_0, token_ids_1)
+        prompt_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
+                                                                len(token_ids_1) + 1 if token_ids_1 else 0)
 
         if token_ids_1 is not None:
             return [1] * prompt_len + ([0] * len(token_ids_0)) + [1] + ([0] * len(token_ids_1)) + [1]
@@ -239,7 +288,8 @@ class LogLMTokenizer(BertTokenizer):
     def create_token_type_ids_from_sequences(
             self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
     ) -> List[int]:
-        prompt_len = self._prompt_len(token_ids_0, token_ids_1)
+        prompt_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
+                                                                len(token_ids_1) + 1 if token_ids_1 else 0)
 
         if token_ids_1 is None:
             return [0] * (prompt_len + len(token_ids_0) + 1)

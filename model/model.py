@@ -108,11 +108,13 @@ class LogLMPreTrainedModel(BertPreTrainedModel):
 
 
 class NonCausalDecoder(nn.Module):
-    def __init__(self, config: LogLMConfig):
+    def __init__(self, config: LogLMConfig, shared_decoder: BertEncoder = None,
+                 shared_lm_predictions: BertLMPredictionHead = None):
         super().__init__()
         self.config = config.for_non_casual_decoder()
-        self.decoder = BertEncoder(self.config)
-        self.lm_predictions = BertLMPredictionHead(self.config)
+        self.decoder = BertEncoder(self.config) if shared_decoder is None else shared_decoder
+        self.lm_predictions = BertLMPredictionHead(self.config) if shared_lm_predictions is None \
+            else shared_lm_predictions
 
     def forward(self, hidden_states, attention_mask, head_mask=None, labels=None):
         batch_size, seq_length, _ = hidden_states.shape
@@ -158,11 +160,22 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         self.bert = BertModel(config, add_pooling_layer=False)
         self.prompt_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
 
-        self.non_casual_decoder = NonCausalDecoder(config) if config.num_non_casual_decoder_layers > 0 else None
-        self.casual_decoder = CausalDecoder(config) if config.num_casual_decoder_layers > 0 else None
-
         self.lm_predictions = BertLMPredictionHead(config)
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
+
+        if config.shared_non_casual_decoder:
+            self.non_casual_decoder = NonCausalDecoder(
+                config, shared_decoder=self.bert.encoder, shared_lm_predictions=self.lm_predictions
+            )
+        elif config.num_non_casual_decoder_layers > 0:
+            self.non_casual_decoder = NonCausalDecoder(config)
+        else:
+            self.non_casual_decoder = None
+
+        if config.num_casual_decoder_layers > 0:
+            self.casual_decoder = CausalDecoder(config)
+        else:
+            self.casual_decoder = None
 
         # Initialize weights and apply final processing
         self.post_init()

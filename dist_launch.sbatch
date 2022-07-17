@@ -35,6 +35,7 @@ export EVAL_ACCUMULATION_STEPS=1
 
 export SEED=42
 
-export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-50000
+export SHARED_NON_CASUAL_DECODER=false
+#export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-50000
 
 srun ./dist_run.sh

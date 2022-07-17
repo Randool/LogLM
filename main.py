@@ -99,6 +99,8 @@ class ModelArguments:
         metadata={"help": "Whether or not the model should return the last "
                           "key/values attentions (not used by all models)"},
     )
+    shared_non_casual_decoder: Optional[bool] = field(default=False,
+                                                      metadata={"help": "Share encoder and non-casual decoder"})
     num_non_casual_decoder_layers: Optional[int] = field(default=3,
                                                          metadata={"help": "Layers number of non-casual decoder"})
     num_casual_decoder_layers: Optional[int] = field(default=3,
@@ -156,6 +158,7 @@ def main(_args: List[str] = None):
         pad_token_id=tokenizer.pad_token_id,
         position_embedding_type=modelArgs.position_embedding_type,
         use_cache=modelArgs.use_cache,
+        shared_non_casual_decoder=modelArgs.shared_non_casual_decoder,
         num_non_casual_decoder_layers=modelArgs.num_non_casual_decoder_layers,
         num_casual_decoder_layers=modelArgs.num_casual_decoder_layers,
     )

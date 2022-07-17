@@ -9,6 +9,7 @@
 # - PER_DEVICE_EVAL_BATCH_SIZE
 # - GRADIENT_ACCUMULATION_STEPS
 # - EVAL_ACCUMULATION_STEPS
+# - SHARED_NON_CASUAL_DECODER
 
 legal=true
 
@@ -54,14 +55,21 @@ EVAL_STEPS=50000
 DATALOADER_NUM_WORKERS=6
 LABEL_SMOOTHING_FACTOR=0
 DDP_FIND_UNUSED_PARAMETERS=false
-NUM_EXAMPLES_FOR_EPOCH="38944777 38944777 38944777 38944777 38944777 38944777 17901367"
+
+if [ -z "${NUM_EXAMPLES_FOR_EPOCH}" ]; then
+  NUM_EXAMPLES_FOR_EPOCH="38944777 38944777 38944777 38944777 38944777 38944777 17901367"
+fi
+
+if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
+  SHARED_NON_CASUAL_DECODER=false
+fi
 
 # ==== train path ==== #
-OUTPUT_DIR="${CORPUS_PATH}/ckpts/${MODEL_SIZE}"
+OUTPUT_DIR="${CORPUS_PATH}/ckpts/${MODEL_SIZE}_shared-${SHARED_NON_CASUAL_DECODER}"
 LOG_PATH="${OUTPUT_DIR}" # None means output to the stdout
 TENSORBOARD_LOG_PATH="${OUTPUT_DIR}/tensorboard"
 
-if [ -z ${RESUME_CHECKPOINT_PATH} ]; then
+if [ -z "${RESUME_CHECKPOINT_PATH}" ]; then
   RESUME_CHECKPOINT_PATH=None
 fi
 
@@ -107,6 +115,7 @@ main.py \
     --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \
     --num_attention_heads           ${NUM_ATTENTION_HEADS} \
     --intermediate_size             ${INTERMEDIATE_SIZE} \
+    --shared_non_casual_decoder     ${SHARED_NON_CASUAL_DECODER} \
     --num_non_casual_decoder_layers ${NON_CASUAL_LAYERS} \
     --num_casual_decoder_layers     ${CASUAL_LAYERS} \
     \
