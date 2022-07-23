@@ -14,9 +14,10 @@ import torch
 from dataclasses import dataclass
 from torch import nn
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
-from transformers import BertModel, BertPreTrainedModel, BertConfig
+from transformers import BertModel, BertPreTrainedModel, BertConfig, BartConfig
 from transformers.file_utils import ModelOutput
 from transformers.modeling_outputs import SequenceClassifierOutput
+from transformers.models.bart.modeling_bart import BartDecoder
 from transformers.models.bert.modeling_bert import BertLMPredictionHead, BertEncoder
 
 
@@ -42,6 +43,7 @@ class LogLMConfig(BertConfig):
             use_cache=True,
             classifier_dropout=None,
             shared_non_casual_decoder=False,
+            shared_casual_decoder=True,
             num_non_casual_decoder_layers=3,
             num_casual_decoder_layers=3,
             mask_prompt_prob=0.2,
@@ -68,6 +70,7 @@ class LogLMConfig(BertConfig):
         )
 
         self.shared_non_casual_decoder = shared_non_casual_decoder
+        self.shared_casual_decoder = shared_casual_decoder
         self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
         self.num_casual_decoder_layers = num_casual_decoder_layers
         self.mask_prompt_prob = mask_prompt_prob
@@ -78,8 +81,26 @@ class LogLMConfig(BertConfig):
         return config
 
     def for_casual_decoder(self):
-        config = copy.deepcopy(self)
-        config.num_hidden_layers = config.num_casual_decoder_layers
+        config = BartConfig(
+            vocab_size=self.vocab_size,
+            max_position_embeddings=self.max_position_embeddings,
+            encoder_layers=self.num_hidden_layers,
+            encoder_ffn_dim=self.intermediate_size,
+            encoder_attention_heads=self.num_attention_heads,
+            decoder_layers=self.num_casual_decoder_layers,
+            decoder_ffn_dim=self.intermediate_size,
+            activation_function=self.hidden_act,
+            dropout=self.hidden_dropout_prob,
+            attention_dropout=self.attention_probs_dropout_prob,
+            num_labels=2,
+            pad_token_id=0,
+            bos_token_id=14,  # [SEP]
+            eos_token_id=14,
+            decoder_start_token_id=14,
+            forced_eos_token_id=14,
+        )
+        config.hidden_act = self.hidden_act
+        config.layer_norm_eps = self.layer_norm_eps
         return config
 
 
@@ -146,13 +167,33 @@ class NonCausalDecoder(nn.Module):
 
 
 class CausalDecoder(nn.Module):
-    def __init__(self, config: LogLMConfig):
+    def __init__(self, config: LogLMConfig, embeddings: nn.Embedding = None,
+                 shared_lm_predictions: BertLMPredictionHead = None):
         super().__init__()
         self.config = config.for_casual_decoder()
-        # TODO: Implement
+        self.decoder = BartDecoder(self.config, embed_tokens=embeddings)
+        self.lm_predictions = BertLMPredictionHead(self.config) if shared_lm_predictions is None \
+            else shared_lm_predictions
 
-    def forward(self):
-        raise NotImplementedError
+    def forward(self, input_ids, attention_mask, encoder_hidden_states, encoder_attention_mask, labels=None,
+                past_key_values=None):
+        outputs = self.decoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            past_key_values=past_key_values,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+        logits = self.lm_predictions(outputs.last_hidden_state)
+        loss = None
+
+        if labels is not None:
+            loss_fct = CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
+
+        return loss, logits
 
 
 class LogLMForPreTraining(LogLMPreTrainedModel):
@@ -175,7 +216,11 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         else:
             self.non_casual_decoder = None
 
-        if config.num_casual_decoder_layers > 0:
+        if config.shared_casual_decoder:
+            self.casual_decoder = CausalDecoder(
+                config, embeddings=self.bert.embeddings.word_embeddings, shared_lm_predictions=self.lm_predictions
+            )
+        elif config.num_casual_decoder_layers > 0:
             self.casual_decoder = CausalDecoder(config)
         else:
             self.casual_decoder = None
@@ -236,8 +281,8 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         masked_prompt_mask = None
 
         if cal_mlm_loss or cal_nsp_loss:
-            prompt_len = prompt_type_ids.sum(dim=-1)
             if self.training and random.random() < self.config.mask_prompt_prob:
+                prompt_len = prompt_type_ids.sum(dim=-1)
                 masked_prompt_mask = torch.zeros_like(prompt_type_ids, dtype=torch.float)
                 for idx, length in enumerate(prompt_len):
                     reserved_length = random.randint(1, length)
@@ -282,7 +327,13 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 loss = dec_mlm_loss if (loss is None) else loss + dec_mlm_loss
 
             if self.casual_decoder is not None:
-                # dec_lm_loss, dec_lm_prediction_logits = self.casual_decoder.forward()
+                # dec_lm_loss, dec_lm_prediction_logits = self.casual_decoder.forward(
+                #     input_ids=None,
+                #     attention_mask=None,
+                #     encoder_hidden_states=None,
+                #     encoder_attention_mask=None,
+                #     labels=labels
+                # )
                 # loss = dec_lm_loss if (loss is None) else loss + dec_lm_loss
                 pass  # TODO: Implement
 
@@ -304,7 +355,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
 
 
 class LogLMForSequenceClassification(LogLMPreTrainedModel):
-    def __init__(self, config: LogLMConfig):
+    def __init__(self, config: LogLMConfig, pooling_all=False):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
@@ -316,6 +367,7 @@ class LogLMForSequenceClassification(LogLMPreTrainedModel):
                        else config.hidden_dropout_prob),
             nn.Linear(config.hidden_size, config.num_labels)
         )
+        self.pooling_all = pooling_all  # Pooling all hidden states
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -348,7 +400,14 @@ class LogLMForSequenceClassification(LogLMPreTrainedModel):
             return_dict=return_dict,
         )
 
-        pooled_output = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).mean(dim=1)
+        if self.pooling_all:
+            dev_length = attention_mask.sum(dim=-1).unsqueeze(-1)
+            pooled_output = (outputs.last_hidden_state * attention_mask.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
+        else:
+            dev_length = prompt_type_ids.sum(dim=-1).unsqueeze(-1)
+            pooled_output = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
+
+        pooled_output = pooled_output / dev_length
         logits = self.classifier(pooled_output)
 
         loss = None
