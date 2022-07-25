@@ -18,7 +18,7 @@ from transformers.tokenization_utils_base import TruncationStrategy, BatchEncodi
 class LogTruncation:
     """ Find optimal truncated length using Newton's Method """
 
-    def __init__(self, log_base: int, anchored_length: int = -1):
+    def __init__(self, log_base: float, anchored_length: int = -1):
         self._log_base = log_base
         self._ln_base_inverse = 1 / log(log_base)
         self._anchored_length = anchored_length

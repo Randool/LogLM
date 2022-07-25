@@ -30,6 +30,8 @@ class DataArguments:
     train_file_pattern: str = field(default="epoch-*.pretrain.data.shuf")
     dev_file_pattern: str = field(default="dev.data")
 
+    log_base: float = field(default=2, metadata={"help": "Log base"})
+
     @property
     def train_data_files(self) -> List[str]:
         train_data_files = glob.glob(join(self.trainDataPath, self.train_file_pattern))
@@ -139,7 +141,7 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer(dataArgs.vocabPath)
+    tokenizer = LogLMTokenizer(dataArgs.vocabPath, log_base=dataArgs.log_base)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
     config = LogLMConfig(

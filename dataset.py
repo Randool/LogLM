@@ -12,16 +12,19 @@ from typing import List
 import torch
 from torch.utils.data import IterableDataset
 
+from model.tokenizer import LogTruncation
+
 Items = namedtuple("Items", ("input_ids", "token_type_ids", "cls_type_ids", "labels", "SO_label"))
 
 
 class DatasetForShuffledFile(IterableDataset):
-    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, cls_base=2, num_examples: int = None):
+    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, num_examples: int = None, log_base=2):
         self.data_file = data_file
         self.mask_token_id = mask_token_id
         self.pad_token_id = pad_token_id
-        self.cls_base = cls_base
         self.num_examples = num_examples
+
+        self._trunc = LogTruncation(log_base=log_base) if log_base != 2 else None
 
     def __iter__(self):
         def str_to_int_array(string: str) -> List[int]:
@@ -40,10 +43,23 @@ class DatasetForShuffledFile(IterableDataset):
                 cls_length = int(cls_length)
                 SO_label = int(SO_label)
 
+                mask_pos_bias = 0
+
+                # Remove some of cls tokens
+                if self._trunc is not None:
+                    cls_ids, token_ids = labels[:cls_length], labels[cls_length:]
+
+                    new_cls_length = self._trunc.truncated_length(len_ids=len(token_ids))[0]
+                    labels = cls_ids[:new_cls_length] + token_ids
+                    mask_pos_bias = new_cls_length - cls_length
+                    cls_length = new_cls_length
+
+                    token_type_lengths[0] += mask_pos_bias
+
                 # Recover `input_ids` from `labels` and `masked_pos`
                 input_ids = [id_ for id_ in labels]
                 for pos in masked_pos:
-                    input_ids[pos] = self.mask_token_id
+                    input_ids[pos + mask_pos_bias] = self.mask_token_id
 
                 token_type_ids = [0] * token_type_lengths[0] + [1] * token_type_lengths[1]
                 cls_type_ids = [1] * cls_length + [0] * (len(labels) - cls_length)

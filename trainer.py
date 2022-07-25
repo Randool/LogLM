@@ -325,7 +325,7 @@ class LogLMTrainer(Trainer):
                     "flag to your launch command, but you will resume the training on data already seen by your model."
                 )
                 if self.is_world_process_zero() and not args.disable_tqdm:
-                    steps_trained_progress_bar = tqdm(total=steps_trained_in_current_epoch)
+                    steps_trained_progress_bar = tqdm(total=steps_trained_in_current_epoch, mininterval=1, ncols=64)
                     steps_trained_progress_bar.set_description("Skipping the first batches")
 
         # Update the references

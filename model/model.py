@@ -44,9 +44,10 @@ class LogLMConfig(BertConfig):
             classifier_dropout=None,
             shared_non_casual_decoder=False,
             shared_casual_decoder=True,
-            num_non_casual_decoder_layers=3,
-            num_casual_decoder_layers=3,
+            num_non_casual_decoder_layers=2,
+            num_casual_decoder_layers=2,
             mask_cls_prob=0.2,
+            cls_noise_std=0.002,
             **kwargs
     ):
         super().__init__(
@@ -74,6 +75,7 @@ class LogLMConfig(BertConfig):
         self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
         self.num_casual_decoder_layers = num_casual_decoder_layers
         self.mask_cls_prob = mask_cls_prob
+        self.cls_noise_std = cls_noise_std
 
     def for_non_casual_decoder(self):
         config = copy.deepcopy(self)
@@ -271,6 +273,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        last_hidden_state = outputs.last_hidden_state
 
         loss = mlm_loss = sop_loss = dec_mlm_loss = None
         prediction_logits = dec_prediction_logits = seq_relationship_logits = None
@@ -280,6 +283,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         # Mask some positions (from back to front)
         masked_cls_mask = None
 
+        # Prepare cls mask
         if cal_mlm_loss or cal_nsp_loss:
             if self.training and random.random() < self.config.mask_cls_prob:
                 cls_len = cls_type_ids.sum(dim=-1)
@@ -292,7 +296,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             masked_cls_mask = masked_cls_mask.unsqueeze(-1)
 
         if cal_mlm_loss:
-            prediction_logits = self.lm_predictions(outputs.last_hidden_state)
+            prediction_logits = self.lm_predictions(last_hidden_state)
             labels_ = labels.clone()
             labels_[input_ids != mask_token_id] = -100
             mlm_loss = loss_fct(prediction_logits.view(-1, self.config.vocab_size), labels_.view(-1))
@@ -300,7 +304,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
 
         if cal_nsp_loss:
             masked_cls_len = masked_cls_mask.sum(dim=1)  # [B, 1]
-            cls_hiddens = (outputs.last_hidden_state * masked_cls_mask).sum(dim=1)  # [B, D]
+            cls_hiddens = (last_hidden_state * masked_cls_mask).sum(dim=1)  # [B, D]
             cls_hiddens = cls_hiddens / masked_cls_len
             seq_relationship_logits = self.seq_relationship(cls_hiddens)
             sop_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
@@ -314,9 +318,13 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
 
                 inputs_embeds = (
-                        self.cls_proj(outputs.last_hidden_state) * masked_cls_mask +
-                        dummy_embeds * (1 - masked_cls_mask)
+                        self.cls_proj(last_hidden_state) * masked_cls_mask + dummy_embeds * (1 - masked_cls_mask)
                 )
+
+                # Add gaussian noise on cls
+                if self.config.cls_noise_std > 0:
+                    noise = last_hidden_state.new(last_hidden_state.shape).normal_(0, self.config.cls_noise_std)
+                    inputs_embeds = inputs_embeds + noise * masked_cls_mask
 
                 dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
                     hidden_states=inputs_embeds,

@@ -3,19 +3,32 @@
 # Need:
 # - MASTER_HOST
 # - MASTER_PORT
-# - MODEL_SIZE= tiny | base | large
 # - nproc_per_node
 # - PER_DEVICE_TRAIN_BATCH_SIZE
 # - PER_DEVICE_EVAL_BATCH_SIZE
 # - GRADIENT_ACCUMULATION_STEPS
 # - EVAL_ACCUMULATION_STEPS
+# - MODEL_SIZE= tiny | base | large
+# - HIDDEN_SIZE
+# - NUM_HIDDEN_LAYERS
+# - NUM_ATTENTION_HEADS
+# - INTERMEDIATE_SIZE
+# - NON_CASUAL_LAYERS
+# - CASUAL_LAYERS
 # - SHARED_NON_CASUAL_DECODER
 
 legal=true
 
-for slot in MASTER_HOST MASTER_PORT MODEL_SIZE nproc_per_node PER_DEVICE_TRAIN_BATCH_SIZE PER_DEVICE_EVAL_BATCH_SIZE GRADIENT_ACCUMULATION_STEPS EVAL_ACCUMULATION_STEPS; do
-  if [ -z ${slot} ]; then
-    echo "No ${slot}"
+for slot in MASTER_HOST MASTER_PORT nproc_per_node PER_DEVICE_TRAIN_BATCH_SIZE PER_DEVICE_EVAL_BATCH_SIZE GRADIENT_ACCUMULATION_STEPS EVAL_ACCUMULATION_STEPS; do
+  if [ -z "${slot}" ]; then
+    echo "Require ${slot}"
+    legal=false
+  fi
+done
+
+for slot in MODEL_SIZE HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS INTERMEDIATE_SIZE NON_CASUAL_LAYERS CASUAL_LAYERS SHARED_NON_CASUAL_DECODER; do
+  if [ -z "${slot}" ]; then
+    echo "Require ${slot}"
     legal=false
   fi
 done
@@ -36,14 +49,16 @@ TRAIN_DATA_PATH="${CORPUS_PATH}/processed/train"
 EVAL_DATA_PATH="${CORPUS_PATH}/processed/dev"
 VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
 
+if [ -z "${LOG_BASE}" ]; then
+  LOG_BASE=2
+fi
+
 # ==== training hyperparameters ==== #
 LEARNING_RATE=1e-4
-#PER_DEVICE_TRAIN_BATCH_SIZE=16
-#PER_DEVICE_EVAL_BATCH_SIZE=16
-#GRADIENT_ACCUMULATION_STEPS=2
-#EVAL_ACCUMULATION_STEPS=2
 WEIGHT_DECAY=0.01
-MAX_STEPS=1000000
+if [ -z "${MAX_STEPS}" ]; then
+  MAX_STEPS=1000000
+fi
 NUM_TRAIN_EPOCHS=10
 LR_SCHEDULER_TYPE="linear"
 WARMUP_STEPS=10000
@@ -54,7 +69,6 @@ EVALUATION_STRATEGY="steps"
 EVAL_STEPS=50000
 DATALOADER_NUM_WORKERS=6
 LABEL_SMOOTHING_FACTOR=0
-DDP_FIND_UNUSED_PARAMETERS=false
 
 if [ -z "${NUM_EXAMPLES_FOR_EPOCH}" ]; then
   NUM_EXAMPLES_FOR_EPOCH="38944777 38944777 38944777 38944777 38944777 38944777 17901367"
@@ -65,7 +79,23 @@ if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
 fi
 
 # ==== train path ==== #
-OUTPUT_DIR="${CORPUS_PATH}/ckpts/${MODEL_SIZE}_shared-${SHARED_NON_CASUAL_DECODER}"
+OUTPUT_DIR=${CORPUS_PATH}/ckpts/${MODEL_SIZE}
+
+# +非自回归层数
+if ${SHARED_NON_CASUAL_DECODER}; then
+  OUTPUT_DIR=${OUTPUT_DIR}_shared_ndec
+elif [ ${NON_CASUAL_LAYERS} -gt 0 ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_ndec${NON_CASUAL_LAYERS}
+fi
+
+# +自回归层数
+if [ ${CASUAL_LAYERS} -gt 0 ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_dec${CASUAL_LAYERS}
+fi
+
+# +log底数
+OUTPUT_DIR=${OUTPUT_DIR}_log${LOG_BASE}
+
 LOG_PATH="${OUTPUT_DIR}" # None means output to the stdout
 TENSORBOARD_LOG_PATH="${OUTPUT_DIR}/tensorboard"
 
@@ -73,29 +103,31 @@ if [ -z "${RESUME_CHECKPOINT_PATH}" ]; then
   RESUME_CHECKPOINT_PATH=None
 fi
 
+echo $OUTPUT_DIR
+
 # *************************************************** #
-if [[ ${MODEL_SIZE} == 'tiny' ]]; then
-    HIDDEN_SIZE=256
-    NUM_HIDDEN_LAYERS=6
-    NUM_ATTENTION_HEADS=8
-    INTERMEDIATE_SIZE=1024
-    NON_CASUAL_LAYERS=2
-    CASUAL_LAYERS=2
-elif [[ ${MODEL_SIZE} == 'base' ]]; then
-    HIDDEN_SIZE=768
-    NUM_HIDDEN_LAYERS=12
-    NUM_ATTENTION_HEADS=12
-    INTERMEDIATE_SIZE=3072
-    NON_CASUAL_LAYERS=3
-    CASUAL_LAYERS=3
-else  # large
-    HIDDEN_SIZE=1024
-    NUM_HIDDEN_LAYERS=24
-    NUM_ATTENTION_HEADS=16
-    INTERMEDIATE_SIZE=4096
-    NON_CASUAL_LAYERS=6
-    CASUAL_LAYERS=6
-fi
+#if [[ ${MODEL_SIZE} == 'tiny' ]]; then
+#    HIDDEN_SIZE=256
+#    NUM_HIDDEN_LAYERS=6
+#    NUM_ATTENTION_HEADS=8
+#    INTERMEDIATE_SIZE=1024
+#    NON_CASUAL_LAYERS=2
+#    CASUAL_LAYERS=2
+#elif [[ ${MODEL_SIZE} == 'base' ]]; then
+#    HIDDEN_SIZE=768
+#    NUM_HIDDEN_LAYERS=12
+#    NUM_ATTENTION_HEADS=12
+#    INTERMEDIATE_SIZE=3072
+#    NON_CASUAL_LAYERS=3
+#    CASUAL_LAYERS=3
+#else  # large
+#    HIDDEN_SIZE=1024
+#    NUM_HIDDEN_LAYERS=24
+#    NUM_ATTENTION_HEADS=16
+#    INTERMEDIATE_SIZE=4096
+#    NON_CASUAL_LAYERS=6
+#    CASUAL_LAYERS=6
+#fi
 
 OMP_NUM_THREADS=1 \
 python -um torch.distributed.launch \
@@ -110,6 +142,7 @@ main.py \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \
     --logPath                       ${LOG_PATH} \
+    --log_base                      ${LOG_BASE} \
     --resume_checkpoint             ${RESUME_CHECKPOINT_PATH} \
     --hidden_size                   ${HIDDEN_SIZE} \
     --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \
@@ -140,7 +173,7 @@ main.py \
     --eval_steps                    ${EVAL_STEPS} \
     --dataloader_num_workers        ${DATALOADER_NUM_WORKERS} \
     --label_smoothing_factor        ${LABEL_SMOOTHING_FACTOR} \
-    --ddp_find_unused_parameters    ${DDP_FIND_UNUSED_PARAMETERS} \
+    --ddp_find_unused_parameters    true \
     --load_best_model_at_end        true \
     --metric_for_best_model         mlm_acc \
     --greater_is_better             true \
