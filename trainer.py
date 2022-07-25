@@ -59,14 +59,16 @@ class LogLMTrainer(Trainer):
         self.train_data_files = train_data_files
         self.num_examples_for_epoch = num_examples_for_epoch
         self.epoch_idx = 0
+        self.log_base = tokenizer.log_base
 
         self.train_dataset = DatasetForShuffledFile(train_data_files[self.epoch_idx],
                                                     mask_token_id=tokenizer.mask_token_id,
                                                     pad_token_id=tokenizer.pad_token_id,
-                                                    num_examples=num_examples_for_epoch[self.epoch_idx])
-        self.eval_dataset = DatasetForShuffledFile(eval_data_file,
-                                                   mask_token_id=tokenizer.mask_token_id,
-                                                   pad_token_id=tokenizer.pad_token_id)
+                                                    num_examples=num_examples_for_epoch[self.epoch_idx],
+                                                    log_base=self.log_base)
+        self.eval_dataset = DatasetForShuffledFile(eval_data_file, mask_token_id=tokenizer.mask_token_id,
+                                                   pad_token_id=tokenizer.pad_token_id,
+                                                   log_base=self.log_base)
 
         self.logger = logger if logger else logging.getLogger(__name__)
 
@@ -118,12 +120,11 @@ class LogLMTrainer(Trainer):
     def get_next_train_dataloader(self):
         self.epoch_idx = (self.epoch_idx + 1) % len(self.train_data_files)
 
-        self.train_dataset = DatasetForShuffledFile(
-            self.train_data_files[self.epoch_idx],
-            mask_token_id=self.tokenizer.mask_token_id,
-            pad_token_id=self.tokenizer.pad_token_id,
-            num_examples=self.num_examples_for_epoch[self.epoch_idx]
-        )
+        self.train_dataset = DatasetForShuffledFile(self.train_data_files[self.epoch_idx],
+                                                    mask_token_id=self.tokenizer.mask_token_id,
+                                                    pad_token_id=self.tokenizer.pad_token_id,
+                                                    num_examples=self.num_examples_for_epoch[self.epoch_idx],
+                                                    log_base=self.log_base)
 
         return self.get_train_dataloader()
 
@@ -291,7 +292,8 @@ class LogLMTrainer(Trainer):
         self.logger.info(f"  Num examples = {num_examples}")
         self.logger.info(f"  Num Epochs = {num_train_epochs}")
         self.logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
-        self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size}")
+        self.logger.info(
+            f"  Total train batch size (w. parallel, distributed & accumulation) = {total_train_batch_size}")
         self.logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
         self.logger.info(f"  Total optimization steps = {max_steps}")
 

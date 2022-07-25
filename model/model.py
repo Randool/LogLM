@@ -46,7 +46,7 @@ class LogLMConfig(BertConfig):
             shared_casual_decoder=True,
             num_non_casual_decoder_layers=3,
             num_casual_decoder_layers=3,
-            mask_prompt_prob=0.2,
+            mask_cls_prob=0.2,
             **kwargs
     ):
         super().__init__(
@@ -73,7 +73,7 @@ class LogLMConfig(BertConfig):
         self.shared_casual_decoder = shared_casual_decoder
         self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
         self.num_casual_decoder_layers = num_casual_decoder_layers
-        self.mask_prompt_prob = mask_prompt_prob
+        self.mask_cls_prob = mask_cls_prob
 
     def for_non_casual_decoder(self):
         config = copy.deepcopy(self)
@@ -202,7 +202,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         self.config = config
 
         self.bert = BertModel(config, add_pooling_layer=False)
-        self.prompt_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
+        self.cls_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
 
         self.lm_predictions = BertLMPredictionHead(config)
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
@@ -240,7 +240,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             attention_mask=None,
             token_type_ids=None,
             position_ids=None,
-            prompt_type_ids=None,
+            cls_type_ids=None,
             head_mask=None,
             inputs_embeds=None,
             labels=None,
@@ -255,9 +255,9 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         cal_mlm_loss = (labels is not None)
         cal_nsp_loss = (sentence_pair_label is not None)
 
-        if (labels is not None) and (prompt_type_ids is None):
-            prompt_type_ids = (1 <= input_ids) & (input_ids <= 11)
-            prompt_type_ids[:, 0] = True
+        if (labels is not None) and (cls_type_ids is None):
+            cls_type_ids = (1 <= input_ids) & (input_ids <= 11)
+            cls_type_ids[:, 0] = True
 
         # First pass: nsp_loss + mlm_loss
         outputs = self.bert(
@@ -278,18 +278,18 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         loss_fct = CrossEntropyLoss(ignore_index=-100)
 
         # Mask some positions (from back to front)
-        masked_prompt_mask = None
+        masked_cls_mask = None
 
         if cal_mlm_loss or cal_nsp_loss:
-            if self.training and random.random() < self.config.mask_prompt_prob:
-                prompt_len = prompt_type_ids.sum(dim=-1)
-                masked_prompt_mask = torch.zeros_like(prompt_type_ids, dtype=torch.float)
-                for idx, length in enumerate(prompt_len):
+            if self.training and random.random() < self.config.mask_cls_prob:
+                cls_len = cls_type_ids.sum(dim=-1)
+                masked_cls_mask = torch.zeros_like(cls_type_ids, dtype=torch.float)
+                for idx, length in enumerate(cls_len):
                     reserved_length = random.randint(1, length)
-                    masked_prompt_mask[idx, :reserved_length] = 1
+                    masked_cls_mask[idx, :reserved_length] = 1
             else:
-                masked_prompt_mask = prompt_type_ids.float()
-            masked_prompt_mask = masked_prompt_mask.unsqueeze(-1)
+                masked_cls_mask = cls_type_ids.float()
+            masked_cls_mask = masked_cls_mask.unsqueeze(-1)
 
         if cal_mlm_loss:
             prediction_logits = self.lm_predictions(outputs.last_hidden_state)
@@ -299,23 +299,23 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             loss = mlm_loss
 
         if cal_nsp_loss:
-            masked_prompt_len = masked_prompt_mask.sum(dim=1)  # [B, 1]
-            prompt_hiddens = (outputs.last_hidden_state * masked_prompt_mask).sum(dim=1)  # [B, D]
-            prompt_hiddens = prompt_hiddens / masked_prompt_len
-            seq_relationship_logits = self.seq_relationship(prompt_hiddens)
+            masked_cls_len = masked_cls_mask.sum(dim=1)  # [B, 1]
+            cls_hiddens = (outputs.last_hidden_state * masked_cls_mask).sum(dim=1)  # [B, D]
+            cls_hiddens = cls_hiddens / masked_cls_len
+            seq_relationship_logits = self.seq_relationship(cls_hiddens)
             sop_loss = loss_fct(seq_relationship_logits.view(-1, 2), sentence_pair_label.view(-1))
             loss = sop_loss if (loss is None) else loss + sop_loss
 
         # Second pass: mlm_loss
         if cal_mlm_loss:
             if self.non_casual_decoder is not None:
-                dummy_input_ids = torch.zeros_like(prompt_type_ids, dtype=torch.long)
+                dummy_input_ids = torch.zeros_like(cls_type_ids, dtype=torch.long)
                 dummy_input_ids[torch.where(attention_mask)] = mask_token_id
                 dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
 
                 inputs_embeds = (
-                        self.prompt_proj(outputs.last_hidden_state) * masked_prompt_mask +
-                        dummy_embeds * (1 - masked_prompt_mask)
+                        self.cls_proj(outputs.last_hidden_state) * masked_cls_mask +
+                        dummy_embeds * (1 - masked_cls_mask)
                 )
 
                 dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
@@ -378,7 +378,7 @@ class LogLMForSequenceClassification(LogLMPreTrainedModel):
             attention_mask=None,
             token_type_ids=None,
             position_ids=None,
-            prompt_type_ids=None,
+            cls_type_ids=None,
             head_mask=None,
             inputs_embeds=None,
             labels=None,
@@ -404,8 +404,8 @@ class LogLMForSequenceClassification(LogLMPreTrainedModel):
             dev_length = attention_mask.sum(dim=-1).unsqueeze(-1)
             pooled_output = (outputs.last_hidden_state * attention_mask.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
         else:
-            dev_length = prompt_type_ids.sum(dim=-1).unsqueeze(-1)
-            pooled_output = (outputs.last_hidden_state * prompt_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
+            dev_length = cls_type_ids.sum(dim=-1).unsqueeze(-1)
+            pooled_output = (outputs.last_hidden_state * cls_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
 
         pooled_output = pooled_output / dev_length
         logits = self.classifier(pooled_output)

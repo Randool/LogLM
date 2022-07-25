@@ -102,7 +102,7 @@ class MLMPreprocessor:
                 trunc_tokens.pop()
 
     @staticmethod
-    def prompt_length(length: int) -> int:
+    def cls_length(length: int) -> int:
         return ceil(log2(max(1, length)))
 
     @staticmethod
@@ -190,30 +190,30 @@ class MLMPreprocessor:
         return sorted(pos)
 
     def _create_sample(self, tokens_a: List[str], tokens_b: List[str]):
-        prompt_len = self.prompt_length(len(tokens_a) + len(tokens_b))
-        token_type_lengths = (prompt_len + len(tokens_a) + 1, len(tokens_b) + 1)
+        cls_len = self.cls_length(len(tokens_a) + len(tokens_b))
+        token_type_lengths = (cls_len + len(tokens_a) + 1, len(tokens_b) + 1)
 
-        prompt_token_ids = self.tokenizer.prompt_token_ids[:prompt_len]
+        cls_token_ids = self.tokenizer.cls_token_ids[:cls_len]
         sep_token_id = [self.tokenizer.sep_token_id]
 
         input_ids_a: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_a)
         input_ids_b: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_b)
-        labels = prompt_token_ids + input_ids_a + sep_token_id + input_ids_b + sep_token_id
+        labels = cls_token_ids + input_ids_a + sep_token_id + input_ids_b + sep_token_id
 
         if self.config.useWWM:
             aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
             aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
-            masked_pos = self._masked_pos(aligned_tokens_a, prompt_len) + \
-                         self._masked_pos(aligned_tokens_b, prompt_len + len(input_ids_a) + 1)
+            masked_pos = self._masked_pos(aligned_tokens_a, cls_len) + \
+                         self._masked_pos(aligned_tokens_b, cls_len + len(input_ids_a) + 1)
         else:
-            masked_pos = self._masked_pos(input_ids_a, prompt_len) + \
-                         self._masked_pos(input_ids_b, prompt_len + len(input_ids_a) + 1)
+            masked_pos = self._masked_pos(input_ids_a, cls_len) + \
+                         self._masked_pos(input_ids_b, cls_len + len(input_ids_a) + 1)
 
-        return labels, masked_pos, token_type_lengths, prompt_len
+        return labels, masked_pos, token_type_lengths, cls_len
 
     def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
-                                    token_type_lengths: Tuple[int, int], prompt_length: int, SO_label: int):
-        """ Format: `labels|masked_pos|token_type_lengths|prompt_length|SO_label` """
+                                    token_type_lengths: Tuple[int, int], cls_length: int, SO_label: int):
+        """ Format: `labels|masked_pos|token_type_lengths|cls_length|SO_label` """
 
         def int_array_to_str(array: Iterable[int]) -> str:
             return " ".join(map(str, array))
@@ -221,7 +221,7 @@ class MLMPreprocessor:
         line = int_array_to_str(labels) + "|" + \
                int_array_to_str(masked_pos) + "|" + \
                int_array_to_str(token_type_lengths) + "|" + \
-               str(prompt_length) + "|" + str(SO_label) + "\n"
+               str(cls_length) + "|" + str(SO_label) + "\n"
         self.writer.write(line)
 
     def _create_and_save_instances_from_document(self, document: List[List[str]]):
@@ -232,9 +232,9 @@ class MLMPreprocessor:
         for i, sent in enumerate(document):
             current_chunk.append(sent)
             current_length += len(sent)
-            prompt_len = self.prompt_length(current_length)
+            cls_len = self.cls_length(current_length)
 
-            if i == len(document) - 1 or prompt_len + current_length + 2 >= self.config.maxSeqLen:
+            if i == len(document) - 1 or cls_len + current_length + 2 >= self.config.maxSeqLen:
                 if current_chunk:
                     # `a_end` is how many segments from `current_chunk` go
                     # into the `A` (first) sentence.
@@ -248,7 +248,7 @@ class MLMPreprocessor:
                     tokens_a = [token for chunk in current_chunk[:a_end] for token in chunk]
                     tokens_b = [token for chunk in current_chunk[a_end:] for token in chunk]
 
-                    self.truncate_sent_pair(tokens_a, tokens_b, self.config.maxSeqLen - 2 - prompt_len)
+                    self.truncate_sent_pair(tokens_a, tokens_b, self.config.maxSeqLen - 2 - cls_len)
                     assert len(tokens_a) >= 1 and len(tokens_b) >= 1
 
                     SO_label = 1
@@ -256,10 +256,10 @@ class MLMPreprocessor:
                         tokens_a, tokens_b = tokens_b, tokens_a
                         SO_label = 0
 
-                    labels, masked_pos, token_type_lengths, prompt_len = self._create_sample(tokens_a, tokens_b)
+                    labels, masked_pos, token_type_lengths, cls_len = self._create_sample(tokens_a, tokens_b)
                     self._save_sample_to_output_file(labels=labels, masked_pos=masked_pos,
                                                      token_type_lengths=token_type_lengths,
-                                                     prompt_length=prompt_len, SO_label=SO_label)
+                                                     cls_length=cls_len, SO_label=SO_label)
                     example_num += 1
 
                 current_chunk = []
