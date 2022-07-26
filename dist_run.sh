@@ -44,10 +44,15 @@ set -e
 
 # ******************* CONFIGURATION ******************* #
 # ==== data path ==== #
-CORPUS_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
+if [ -z "${CORPUS_PATH}" ]; then
+  CORPUS_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
+fi
 TRAIN_DATA_PATH="${CORPUS_PATH}/processed/train"
 EVAL_DATA_PATH="${CORPUS_PATH}/processed/dev"
-VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
+
+if [ -z "${VOCAB_PATH}" ]; then
+  VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
+fi
 
 if [ -z "${LOG_BASE}" ]; then
   LOG_BASE=2
@@ -104,30 +109,6 @@ if [ -z "${RESUME_CHECKPOINT_PATH}" ]; then
 fi
 
 echo $OUTPUT_DIR
-
-# *************************************************** #
-#if [[ ${MODEL_SIZE} == 'tiny' ]]; then
-#    HIDDEN_SIZE=256
-#    NUM_HIDDEN_LAYERS=6
-#    NUM_ATTENTION_HEADS=8
-#    INTERMEDIATE_SIZE=1024
-#    NON_CASUAL_LAYERS=2
-#    CASUAL_LAYERS=2
-#elif [[ ${MODEL_SIZE} == 'base' ]]; then
-#    HIDDEN_SIZE=768
-#    NUM_HIDDEN_LAYERS=12
-#    NUM_ATTENTION_HEADS=12
-#    INTERMEDIATE_SIZE=3072
-#    NON_CASUAL_LAYERS=3
-#    CASUAL_LAYERS=3
-#else  # large
-#    HIDDEN_SIZE=1024
-#    NUM_HIDDEN_LAYERS=24
-#    NUM_ATTENTION_HEADS=16
-#    INTERMEDIATE_SIZE=4096
-#    NON_CASUAL_LAYERS=6
-#    CASUAL_LAYERS=6
-#fi
 
 OMP_NUM_THREADS=1 \
 python -um torch.distributed.launch \
