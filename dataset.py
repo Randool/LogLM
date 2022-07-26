@@ -24,7 +24,7 @@ class DatasetForShuffledFile(IterableDataset):
         self.pad_token_id = pad_token_id
         self.num_examples = num_examples
 
-        self._trunc = LogTruncation(log_base=log_base) if log_base != 2 else None
+        self._trunc = LogTruncation(log_base=log_base)
 
     def __iter__(self):
         def str_to_int_array(string: str) -> List[int]:
@@ -43,18 +43,19 @@ class DatasetForShuffledFile(IterableDataset):
                 cls_length = int(cls_length)
                 SO_label = int(SO_label)
 
-                mask_pos_bias = 0
+                # Remove or add some of cls tokens
+                cls_ids, token_ids = labels[:cls_length], labels[cls_length:]
+                new_cls_length = self._trunc.truncated_length(len_ids=len(token_ids))[0]
+                assert new_cls_length <= 12, f"new_cls_length ({new_cls_length}) > 12"
 
-                # Remove some of cls tokens
-                if self._trunc is not None:
-                    cls_ids, token_ids = labels[:cls_length], labels[cls_length:]
+                while new_cls_length > len(cls_ids):
+                    cls_ids.append(cls_ids[-1] + 1)
 
-                    new_cls_length = self._trunc.truncated_length(len_ids=len(token_ids))[0]
-                    labels = cls_ids[:new_cls_length] + token_ids
-                    mask_pos_bias = new_cls_length - cls_length
-                    cls_length = new_cls_length
+                labels = cls_ids[:new_cls_length] + token_ids
+                mask_pos_bias = new_cls_length - cls_length
+                cls_length = new_cls_length
 
-                    token_type_lengths[0] += mask_pos_bias
+                token_type_lengths[0] += mask_pos_bias
 
                 # Recover `input_ids` from `labels` and `masked_pos`
                 input_ids = [id_ for id_ in labels]
