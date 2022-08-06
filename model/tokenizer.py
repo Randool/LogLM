@@ -6,13 +6,15 @@
 @Version     :  1.0
 @Description :  BertTokenizer with variable length of `[CLS]`
 """
+import json
+import os
 from itertools import chain
 from math import ceil, log, floor
 from typing import Optional, List, Union, Dict, Tuple
 
 from transformers import BertTokenizer
 from transformers.file_utils import PaddingStrategy, TensorType
-from transformers.tokenization_utils_base import TruncationStrategy, BatchEncoding, EncodedInput
+from transformers.tokenization_utils_base import TruncationStrategy, BatchEncoding, EncodedInput, TOKENIZER_CONFIG_FILE
 
 
 class LogTruncation:
@@ -22,6 +24,14 @@ class LogTruncation:
         self._log_base = log_base
         self._ln_base_inverse = 1 / log(log_base)
         self._anchored_length = anchored_length
+
+    def set_log_base_or_anchored_length(self, log_base: float = None, anchored_length: int = None):
+        if log_base is not None:
+            self._log_base = log_base
+            self._ln_base_inverse = 1 / log(log_base)
+
+        if anchored_length is not None:
+            self._anchored_length = anchored_length
 
     @property
     def log_base(self):
@@ -117,6 +127,9 @@ class LogLMTokenizer(BertTokenizer):
 
         self.log_truncation = LogTruncation(log_base, anchored_length)
 
+    def set_log_base_or_anchored_length(self, log_base: float = None, anchored_length: int = None):
+        self.log_truncation.set_log_base_or_anchored_length(log_base, anchored_length)
+
     @property
     def log_base(self):
         return self.log_truncation.log_base
@@ -138,18 +151,19 @@ class LogLMTokenizer(BertTokenizer):
             pad_to_multiple_of=pad_to_multiple_of, return_attention_mask=return_attention_mask
         )
 
-        required_input = encoded_inputs["cls_type_ids"]
-        needs_to_be_padded = padding_strategy != PaddingStrategy.DO_NOT_PAD and len(required_input) != max_length
+        if "cls_type_ids" in encoded_inputs:
+            required_input = encoded_inputs["cls_type_ids"]
+            needs_to_be_padded = padding_strategy != PaddingStrategy.DO_NOT_PAD and len(required_input) != max_length
 
-        if needs_to_be_padded:
-            difference = max_length - len(required_input)
+            if needs_to_be_padded:
+                difference = max_length - len(required_input)
 
-            if self.padding_side == "right":
-                if "cls_type_ids" in encoded_inputs:
-                    encoded_inputs["cls_type_ids"] = encoded_inputs["cls_type_ids"] + [0] * difference
-            else:
-                if "cls_type_ids" in encoded_inputs:
-                    encoded_inputs["cls_type_ids"] = [0] * difference + encoded_inputs["cls_type_ids"]
+                if self.padding_side == "right":
+                    if "cls_type_ids" in encoded_inputs:
+                        encoded_inputs["cls_type_ids"] = encoded_inputs["cls_type_ids"] + [0] * difference
+                else:
+                    if "cls_type_ids" in encoded_inputs:
+                        encoded_inputs["cls_type_ids"] = [0] * difference + encoded_inputs["cls_type_ids"]
 
         return encoded_inputs
 
@@ -320,3 +334,28 @@ class LogLMTokenizer(BertTokenizer):
             return [0] * (cls_len + len(token_ids_0) + 1)
 
         return [0] * (cls_len + len(token_ids_0) + 1) + [1] * (len(token_ids_1) + 1)
+
+    def save_pretrained(
+            self,
+            save_directory: Union[str, os.PathLike],
+            legacy_format: Optional[bool] = None,
+            filename_prefix: Optional[str] = None,
+            push_to_hub: bool = False,
+            **kwargs,
+    ) -> Tuple[str]:
+        returned = super().save_pretrained(
+            save_directory=save_directory,
+            legacy_format=legacy_format,
+            filename_prefix=filename_prefix,
+            push_to_hub=push_to_hub
+        )
+
+        # Add `log_base` & `anchored_length` to `tokenizer_config.json`
+        with open(TOKENIZER_CONFIG_FILE, "r+", encoding="utf8") as f:
+            config = json.load(f)
+            config["log_base"] = self.log_base
+            config["anchored_length"] = self.anchored_length
+            f.seek(0)
+            json.dump(config, f)
+
+        return returned

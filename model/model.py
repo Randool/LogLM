@@ -322,7 +322,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 )
 
                 # Add gaussian noise on cls
-                if self.config.cls_noise_std > 0:
+                if self.config.cls_noise_std > 0 and self.training:
                     noise = last_hidden_state.new(last_hidden_state.shape).normal_(0, self.config.cls_noise_std)
                     inputs_embeds = inputs_embeds + noise * masked_cls_mask
 
