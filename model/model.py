@@ -313,18 +313,17 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         # Second pass: mlm_loss
         if cal_mlm_loss:
             if self.non_casual_decoder is not None:
-                dummy_input_ids = torch.zeros_like(cls_type_ids, dtype=torch.long)
-                dummy_input_ids[torch.where(attention_mask)] = mask_token_id
+                # dummy_input_ids = torch.zeros_like(cls_type_ids, dtype=torch.long).fill_(self.config.pad_token_id)
+                # dummy_input_ids[torch.where(attention_mask)] = mask_token_id
+                dummy_input_ids = attention_mask * mask_token_id + (1 - attention_mask) * self.config.pad_token_id
                 dummy_embeds = self.bert.embeddings.forward(dummy_input_ids, token_type_ids, position_ids)  # [B, L, D]
 
                 inputs_embeds = (
                         self.cls_proj(last_hidden_state) * masked_cls_mask + dummy_embeds * (1 - masked_cls_mask)
                 )
 
-                # Add gaussian noise on cls
-                if self.config.cls_noise_std > 0 and self.training:
-                    noise = last_hidden_state.new(last_hidden_state.shape).normal_(0, self.config.cls_noise_std)
-                    inputs_embeds = inputs_embeds + noise * masked_cls_mask
+                # Add dropout noise on cls
+                inputs_embeds = nn.functional.dropout(inputs_embeds, self.config.hidden_dropout_prob, self.training)
 
                 dec_mlm_loss, dec_prediction_logits = self.non_casual_decoder.forward(
                     hidden_states=inputs_embeds,
@@ -409,13 +408,13 @@ class LogLMForSequenceClassification(LogLMPreTrainedModel):
         )
 
         if self.pooling_all:
-            dev_length = attention_mask.sum(dim=-1).unsqueeze(-1)
+            div_length = attention_mask.sum(dim=-1).unsqueeze(-1)
             pooled_output = (outputs.last_hidden_state * attention_mask.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
         else:
-            dev_length = cls_type_ids.sum(dim=-1).unsqueeze(-1)
+            div_length = cls_type_ids.sum(dim=-1).unsqueeze(-1)
             pooled_output = (outputs.last_hidden_state * cls_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
 
-        pooled_output = pooled_output / dev_length
+        pooled_output = pooled_output / div_length
         logits = self.classifier(pooled_output)
 
         loss = None
