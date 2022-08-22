@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=dist_launch_tiny
-#SBATCH --partition=a10,2080ti,gpu
+#SBATCH --partition=2080ti,gpu,a10
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
@@ -9,7 +9,7 @@
 #SBATCH --output=./dist_launch_tiny-%A-%a.log
 #SBATCH --error=./dist_launch_tiny-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]
-#SBATCH --array=0,1,2,3,4
+#SBATCH --array=0
 
 set -e
 
@@ -23,10 +23,10 @@ export GRADIENT_ACCUMULATION_STEPS=1
 export EVAL_ACCUMULATION_STEPS=1
 
 export SEED=42
+export MAX_STEPS=1000000
 
-log_bases=(2 2.23 2.72 4 128)  # 7,6,5,4,1
+log_bases=(2 2.23 2.72 4 1024)  # 7,6,5,4,1
 export LOG_BASE=${log_bases[${SLURM_ARRAY_TASK_ID}]}
-export MAX_STEPS=500000  # 加速起见
 
 export MODEL_SIZE=tiny
 export HIDDEN_SIZE=256

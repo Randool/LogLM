@@ -83,8 +83,9 @@ class LogLMTrainer(Trainer):
         )
 
         self.label_names = ["labels", "sentence_pair_label"]
-        self.loss_names = ["loss", "mlm_loss", "sop_loss", "dec_mlm_loss"]
-        self.logits_names = ["prediction_logits", "dec_prediction_logits", "seq_relationship_logits"]
+        self.loss_names = ["loss", "mlm_loss", "sop_loss", "ndec_mlm_loss", "dec_mlm_loss"]
+        self.logits_names = ["prediction_logits", "ndec_prediction_logits",
+                             "dec_prediction_logits", "seq_relationship_logits"]
 
     def get_train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -628,8 +629,8 @@ class LogLMTrainer(Trainer):
         self.callback_handler.eval_dataloader = dataloader
 
         observed_num_examples, steps = 0, 1e-8
-        loss_sum = mlm_loss_sum = sop_loss_sum = dec_mlm_loss_sum = 0
-        mlm_acc_sum = dec_mlm_acc_sum = sop_acc_sum = 0
+        loss_sum = mlm_loss_sum = sop_loss_sum = ndec_mlm_loss_sum = dec_mlm_loss_sum = 0
+        mlm_acc_sum = ndec_mlm_acc_sum = dec_mlm_acc_sum = sop_acc_sum = 0
 
         for inputs in dataloader:
             observed_batch_size = inputs["input_ids"].shape[0]
@@ -643,6 +644,7 @@ class LogLMTrainer(Trainer):
             loss_sum += losses["loss"].sum().item() if "loss" in losses else 0
             mlm_loss_sum += losses["mlm_loss"].sum().item() if "mlm_loss" in losses else 0
             sop_loss_sum += losses["sop_loss"].sum().item() if "sop_loss" in losses else 0
+            ndec_mlm_loss_sum += losses["ndec_mlm_loss"].sum().item() if "ndec_mlm_loss" in losses else 0
             dec_mlm_loss_sum += losses["dec_mlm_loss"].sum().item() if "dec_mlm_loss" in losses else 0
 
             # Compute Metrics
@@ -650,15 +652,17 @@ class LogLMTrainer(Trainer):
             mask_ids = inputs["input_ids"].eq(inputs["mask_token_id"])
             dec_mask = mlm_labels.ne(-100)
 
-            # self.logits_names = ["prediction_logits", "dec_prediction_logits", "seq_relationship_logits"]
             mlm_pred = logits["prediction_logits"].argmax(dim=-1)
             mlm_acc = mlm_pred[mask_ids].eq(mlm_labels[mask_ids]).sum() / mask_ids.sum()
             mlm_acc_sum += mlm_acc.item()
 
+            if "ndec_prediction_logits" in logits:
+                ndec_mlm_pred = logits["ndec_prediction_logits"].argmax(dim=-1)
+                ndec_mlm_acc = ndec_mlm_pred[dec_mask].eq(mlm_labels[dec_mask]).sum() / dec_mask.sum()
+                ndec_mlm_acc_sum += ndec_mlm_acc.item()
+
             if "dec_prediction_logits" in logits:
-                dec_mlm_pred = logits["dec_prediction_logits"].argmax(dim=-1)
-                dec_mlm_acc = dec_mlm_pred[dec_mask].eq(mlm_labels[dec_mask]).sum() / dec_mask.sum()
-                dec_mlm_acc_sum += dec_mlm_acc.item()
+                pass    # TODO: Implement this
 
             sop_pred = logits["seq_relationship_logits"].argmax(dim=-1)
             sop_acc = sop_pred.eq(sop_labels).sum() / len(sop_labels)
@@ -668,8 +672,10 @@ class LogLMTrainer(Trainer):
             f"{metric_key_prefix}_loss": loss_sum / steps,
             f"{metric_key_prefix}_mlm_loss": mlm_loss_sum / steps,
             f"{metric_key_prefix}_sop_loss": sop_loss_sum / steps,
+            f"{metric_key_prefix}_ndec_mlm_loss": ndec_mlm_loss_sum / steps,
             f"{metric_key_prefix}_dec_mlm_loss": dec_mlm_loss_sum / steps,
             f"{metric_key_prefix}_mlm_acc": mlm_acc_sum / steps,
+            f"{metric_key_prefix}_ndec_mlm_acc": ndec_mlm_acc_sum / steps,
             f"{metric_key_prefix}_dec_mlm_acc": dec_mlm_acc_sum / steps,
             f"{metric_key_prefix}_sop_acc": sop_acc_sum / steps,
         }
