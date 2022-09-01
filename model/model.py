@@ -7,16 +7,21 @@
 @Description :  Bert with variable length of `[CLS]`
 """
 import copy
+import inspect
 import random
-from typing import Optional, Tuple, Union, Dict
+import warnings
+from typing import Optional, Tuple, Union, Dict, List, Callable, Iterable, Any
 
 import torch
 from dataclasses import dataclass
 from torch import nn
+from torch.nn import functional as F
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
-from transformers import BertModel, BertPreTrainedModel, BertConfig, BartConfig
+from transformers import BertModel, BertPreTrainedModel, BertConfig, BartConfig, LogitsProcessorList, \
+    StoppingCriteriaList, Constraint, BeamSearchScorer, ConstrainedBeamSearchScorer
 from transformers.file_utils import ModelOutput
-from transformers.generation_utils import GenerationMixin
+from transformers.generation_utils import GenerationMixin, GreedySearchOutput, SampleOutput, BeamSearchOutput, \
+    BeamSampleOutput
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.models.bart.modeling_bart import BartDecoder, shift_tokens_right
 from transformers.models.bert.modeling_bert import BertLMPredictionHead, BertEncoder
@@ -45,11 +50,10 @@ class LogLMConfig(BertConfig):
             bos_token_id=1,
             pad_token_id=0,
             eos_token_id=14,
+            mask_token_id=15,
             position_embedding_type="absolute",
             use_cache=True,
             classifier_dropout=None,
-            shared_non_casual_decoder=False,
-            shared_casual_decoder=False,
             num_non_casual_decoder_layers=2,
             num_casual_decoder_layers=2,
             mask_cls_prob=0.2,
@@ -75,15 +79,16 @@ class LogLMConfig(BertConfig):
             **kwargs
         )
 
-        self.shared_non_casual_decoder = shared_non_casual_decoder
-        self.shared_casual_decoder = shared_casual_decoder
         self.num_non_casual_decoder_layers = num_non_casual_decoder_layers
         self.num_casual_decoder_layers = num_casual_decoder_layers
         self.mask_cls_prob = mask_cls_prob
 
         self.bos_token_id = bos_token_id
         self.eos_token_id = eos_token_id
+        self.mask_token_id = mask_token_id
         self.decoder_start_token_id = eos_token_id
+
+        self.is_encoder_decoder = self.num_casual_decoder_layers > 0
 
     def for_non_casual_decoder(self):
         config = copy.deepcopy(self)
@@ -215,25 +220,23 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         self.config = config
 
         self.bert = BertModel(config, add_pooling_layer=False)
-        self.cls_proj = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size), nn.Tanh())
 
         self.lm_predictions = BertLMPredictionHead(config)
-        self.seq_relationship = nn.Linear(config.hidden_size, 2)
+        self.seq_relationship = nn.Sequential(
+            nn.Linear(config.hidden_size, 2),
+            nn.Tanh()
+        )
+        self.cls_proj = nn.Sequential(
+            nn.Linear(config.hidden_size, config.hidden_size),
+            nn.Tanh()
+        ) if config.num_casual_decoder_layers > 0 or config.num_non_casual_decoder_layers > 0 else None
 
-        if config.shared_non_casual_decoder:
-            self.non_casual_decoder = NonCausalDecoder(
-                config, shared_decoder=self.bert.encoder, shared_lm_predictions=self.lm_predictions
-            )
-        elif config.num_non_casual_decoder_layers > 0:
+        if config.num_non_casual_decoder_layers > 0:
             self.non_casual_decoder = NonCausalDecoder(config)
         else:
             self.non_casual_decoder = None
 
-        if config.shared_casual_decoder:
-            self.casual_decoder = CausalDecoder(
-                config, embeddings=self.bert.embeddings.word_embeddings, shared_lm_predictions=self.lm_predictions
-            )
-        elif config.num_casual_decoder_layers > 0:
+        if config.num_casual_decoder_layers > 0:
             self.casual_decoder = CausalDecoder(config)
         else:
             self.casual_decoder = None
@@ -281,15 +284,16 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             position_ids=None,
             cls_type_ids=None,
             head_mask=None,
+            encoder_outputs=None,
+            past_key_values=None,
             inputs_embeds=None,
             labels=None,
             sentence_pair_label=None,
             output_attentions=None,
             output_hidden_states=None,
             return_dict=None,
-            mask_token_id=None,
     ):
-        assert mask_token_id is not None, f"Require `mask_token_id`"
+        mask_token_id = self.config.mask_token_id
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         cal_mlm_loss = (labels is not None)
         cal_nsp_loss = (sentence_pair_label is not None)
@@ -299,17 +303,21 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             cls_type_ids[:, 0] = True
 
         # First pass: nsp_loss + mlm_loss
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        if encoder_outputs is None:
+            outputs = self.bert(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            outputs = encoder_outputs
+
         last_hidden_state = outputs.last_hidden_state
 
         loss = mlm_loss = sop_loss = ndec_mlm_loss = dec_mlm_loss = None
@@ -358,7 +366,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                     self.cls_proj(last_hidden_state) * masked_cls_mask + dummy_embeds * (1 - masked_cls_mask)
             )
             # Add dropout noise on cls
-            inputs_embeds = nn.functional.dropout(inputs_embeds, self.config.hidden_dropout_prob, self.training)
+            inputs_embeds = F.dropout(inputs_embeds, self.config.hidden_dropout_prob, self.training)
 
         if self.non_casual_decoder:
             ndec_mlm_loss, ndec_prediction_logits = self.non_casual_decoder.forward(
@@ -402,6 +410,137 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+
+class LogLMForSequenceClassification(LogLMPreTrainedModel):
+    def __init__(self, config: LogLMConfig, pooling_all=False):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        self.bert = BertModel(config)
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(config.classifier_dropout if (config.classifier_dropout is not None)
+                       else config.hidden_dropout_prob),
+            nn.Linear(config.hidden_size, config.num_labels)
+        )
+        self.pooling_all = pooling_all  # Pooling all hidden states
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            token_type_ids=None,
+            position_ids=None,
+            cls_type_ids=None,
+            head_mask=None,
+            inputs_embeds=None,
+            labels=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        if self.pooling_all:
+            div_length = attention_mask.sum(dim=-1).unsqueeze(-1)
+            pooled_output = (outputs.last_hidden_state * attention_mask.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
+        else:
+            div_length = cls_type_ids.sum(dim=-1).unsqueeze(-1)
+            pooled_output = (outputs.last_hidden_state * cls_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
+
+        pooled_output = pooled_output / div_length
+        logits = self.classifier(pooled_output)
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+
+class LogLForForConditionalGeneration(LogLMForPreTraining):
+    def __init__(self, config: LogLMConfig):
+        assert config.num_casual_decoder_layers > 0
+
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        self.bert = BertModel(config)
+
+        self.cls_proj = nn.Sequential(
+            nn.Linear(config.hidden_size, config.hidden_size),
+            nn.Tanh()
+        )
+
+        self.casual_decoder = CausalDecoder(config)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            token_type_ids=None,
+            position_ids=None,
+            cls_type_ids=None,
+            head_mask=None,
+            inputs_embeds=None,
+            encoder_outputs=None,
+            past_key_values=None,
+            labels=None,
+            sentence_pair_label=None,
+            use_cache=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
+    ):
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
     def prepare_inputs_for_generation(
             self,
             decoder_input_ids,
@@ -442,41 +581,85 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
             )
         return reordered_past
 
+    def _prepare_encoder_decoder_kwargs_for_generation(
+            self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # 1. get encoder
+        encoder = self.get_encoder()
+
+        # 2. prepare encoder args and encoder kwargs from model kwargs
+        irrelevant_prefix = ["decoder_", "cross_attn", "use_cache"]
+        encoder_kwargs = {
+            argument: value
+            for argument, value in model_kwargs.items()
+            if not any(argument.startswith(p) for p in irrelevant_prefix)
+        }
+
+        # 3. make sure that encoder returns `ModelOutput`
+        model_input_name = model_input_name if model_input_name is not None else self.main_input_name
+        encoder_kwargs["return_dict"] = True
+        encoder_kwargs[model_input_name] = inputs_tensor
+
+        # 4. Extract cls hidden states
+        cls_type_ids = encoder_kwargs.pop("cls_type_ids")
+        max_cls_len = cls_type_ids.sum(dim=-1).max()
+
+        encoder_outputs = encoder(**encoder_kwargs)
+        encoder_outputs.last_hidden_state = (
+                encoder_outputs.last_hidden_state[:, :max_cls_len] *
+                cls_type_ids[:, :max_cls_len, None].float()
+        )
+        model_kwargs["encoder_outputs"]: ModelOutput = encoder_outputs
+
+        # 5. replace attention_mask with cls_type_ids
+        model_kwargs["attention_mask"] = cls_type_ids[:, :max_cls_len]
+        model_kwargs.pop("cls_type_ids")
+        model_kwargs.pop("token_type_ids")
+
+        return model_kwargs
+
     @torch.no_grad()
     def generate(
             self,
-            input_ids: torch.Tensor = None,
-            attention_mask: torch.Tensor = None,
-            token_type_ids: torch.Tensor = None,
-            position_ids: torch.Tensor = None,
-            cls_type_ids: torch.Tensor = None,
-            # bos_token_id: Optional[int] = None,
-            # pad_token_id: Optional[int] = None,
-            # eos_token_id: Optional[int] = None,
-            **model_kwargs
-    ):
-        # https://huggingface.co/docs/transformers/main/en/main_classes/text_generation#generation
-        assert self.casual_decoder is not None
-
-        # bos_token_id = bos_token_id if bos_token_id is not None else self.config.bos_token_id
-        # pad_token_id = pad_token_id if pad_token_id is not None else self.config.pad_token_id
-        # eos_token_id = eos_token_id if eos_token_id is not None else self.config.eos_token_id
-
-        # First pass: nsp_loss + mlm_loss
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-        )
-        last_hidden_state = outputs.last_hidden_state
-
-        max_cls_len = cls_type_ids.sum(dim=-1).max()
-        encoder_outputs = last_hidden_state[:, :max_cls_len] * cls_type_ids[:, :max_cls_len].float().unsqueeze(dim=-1)
-
-        # model_kwargs["encoder_outputs"] = encoder_outputs
-        # return super().generate(**model_kwargs)
-
+            inputs: Optional[torch.Tensor] = None,
+            max_length: Optional[int] = None,
+            min_length: Optional[int] = None,
+            do_sample: Optional[bool] = None,
+            early_stopping: Optional[bool] = None,
+            num_beams: Optional[int] = None,
+            temperature: Optional[float] = None,
+            top_k: Optional[int] = None,
+            top_p: Optional[float] = None,
+            typical_p: Optional[float] = None,
+            repetition_penalty: Optional[float] = None,
+            bad_words_ids: Optional[Iterable[int]] = None,
+            bos_token_id: Optional[int] = None,
+            pad_token_id: Optional[int] = None,
+            eos_token_id: Optional[int] = None,
+            length_penalty: Optional[float] = None,
+            no_repeat_ngram_size: Optional[int] = None,
+            encoder_no_repeat_ngram_size: Optional[int] = None,
+            num_return_sequences: Optional[int] = None,
+            max_time: Optional[float] = None,
+            max_new_tokens: Optional[int] = None,
+            decoder_start_token_id: Optional[int] = None,
+            use_cache: Optional[bool] = None,
+            num_beam_groups: Optional[int] = None,
+            diversity_penalty: Optional[float] = None,
+            prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
+            logits_processor: Optional[LogitsProcessorList] = LogitsProcessorList(),
+            stopping_criteria: Optional[StoppingCriteriaList] = StoppingCriteriaList(),
+            constraints: Optional[List[Constraint]] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            output_scores: Optional[bool] = None,
+            return_dict_in_generate: Optional[bool] = None,
+            forced_bos_token_id: Optional[int] = None,
+            forced_eos_token_id: Optional[int] = None,
+            remove_invalid_values: Optional[bool] = None,
+            synced_gpus: Optional[bool] = False,
+            **model_kwargs,
+    ) -> Union[GreedySearchOutput, SampleOutput, BeamSearchOutput, BeamSampleOutput, torch.LongTensor]:
         # 1. Set generation parameters if not already defined
         bos_token_id = bos_token_id if bos_token_id is not None else self.config.bos_token_id
         num_beams = num_beams if num_beams is not None else self.config.num_beams
@@ -536,7 +719,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 inputs_tensor, model_kwargs, model_input_name
             )
 
-        # 4. Prepare `input_ids` which will be used for auto-regressive generation
+        # 4. Prepare `input_ids` which will be used for autoregressive generation
         if self.config.is_encoder_decoder:
             input_ids = self._prepare_decoder_input_ids_for_generation(
                 batch_size,
@@ -566,8 +749,10 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
         if input_ids.shape[-1] >= max_length:
             input_ids_string = "decoder_input_ids" if self.config.is_encoder_decoder else "input_ids"
             logger.warning(
-                f"Input length of {input_ids_string} is {input_ids.shape[-1]}, but ``max_length`` is set to {max_length}. "
-                "This can lead to unexpected behavior. You should consider increasing ``config.max_length`` or ``max_length``."
+                f"Input length of {input_ids_string} is {input_ids.shape[-1]}, "
+                f"but ``max_length`` is set to {max_length}. "
+                "This can lead to unexpected behavior. "
+                "You should consider increasing ``config.max_length`` or ``max_length``."
             )
 
         # 6. determine generation mode
@@ -781,7 +966,7 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 raise ValueError("`max_length` needs to be a stopping_criteria for now.")
 
             if num_beams <= 1:
-                raise ValueError("`num_beams` needs to be greater than 1 for constrained genertation.")
+                raise ValueError("`num_beams` needs to be greater than 1 for constrained generation.")
 
             if do_sample:
                 raise ValueError("`do_sample` needs to be false for constrained generation.")
@@ -816,93 +1001,3 @@ class LogLMForPreTraining(LogLMPreTrainedModel):
                 synced_gpus=synced_gpus,
                 **model_kwargs,
             )
-
-
-class LogLMForSequenceClassification(LogLMPreTrainedModel):
-    def __init__(self, config: LogLMConfig, pooling_all=False):
-        super().__init__(config)
-        self.num_labels = config.num_labels
-        self.config = config
-
-        self.bert = BertModel(config)
-
-        self.classifier = nn.Sequential(
-            nn.Dropout(config.classifier_dropout if (config.classifier_dropout is not None)
-                       else config.hidden_dropout_prob),
-            nn.Linear(config.hidden_size, config.num_labels)
-        )
-        self.pooling_all = pooling_all  # Pooling all hidden states
-
-        # Initialize weights and apply final processing
-        self.post_init()
-
-    def forward(
-            self,
-            input_ids=None,
-            attention_mask=None,
-            token_type_ids=None,
-            position_ids=None,
-            cls_type_ids=None,
-            head_mask=None,
-            inputs_embeds=None,
-            labels=None,
-            output_attentions=None,
-            output_hidden_states=None,
-            return_dict=None,
-    ):
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        outputs = self.bert(
-            input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
-
-        if self.pooling_all:
-            div_length = attention_mask.sum(dim=-1).unsqueeze(-1)
-            pooled_output = (outputs.last_hidden_state * attention_mask.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
-        else:
-            div_length = cls_type_ids.sum(dim=-1).unsqueeze(-1)
-            pooled_output = (outputs.last_hidden_state * cls_type_ids.float().unsqueeze(-1)).sum(dim=1)  # [B, D]
-
-        pooled_output = pooled_output / div_length
-        logits = self.classifier(pooled_output)
-
-        loss = None
-        if labels is not None:
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
-
-            if self.config.problem_type == "regression":
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = loss_fct(logits, labels)
-            elif self.config.problem_type == "single_label_classification":
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
-        if not return_dict:
-            output = (logits,) + outputs[2:]
-            return ((loss,) + output) if loss is not None else output
-
-        return SequenceClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
-        )

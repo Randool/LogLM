@@ -9,7 +9,7 @@
 #SBATCH --output=./dist_launch_base-%A-%a.log
 #SBATCH --error=./dist_launch_base-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,130,144,175]
-#SBATCH --array=0,1,2,3
+#SBATCH --array=0-3
 
 set -e
 
@@ -25,19 +25,14 @@ export EVAL_ACCUMULATION_STEPS=2
 export SEED=42
 export MAX_STEPS=1000000
 
-#log_bases=(2 2.23 2.72 4 1024)  # 7,6,5,4,1
-#export LOG_BASE=${log_bases[${SLURM_ARRAY_TASK_ID}]}
-
 case $SLURM_ARRAY_TASK_ID in
 0)
   export LOG_BASE=2
   export NON_CASUAL_LAYERS=0
-  # export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base_log1024/checkpoint-400000
   ;;
 1)
   export LOG_BASE=2
   export NON_CASUAL_LAYERS=2
-  # export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base_ndec2_log1024/checkpoint-800000
   ;;
 2)
   export LOG_BASE=1024

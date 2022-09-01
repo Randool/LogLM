@@ -8,7 +8,7 @@
 #SBATCH --output=./run_pipeline-%A-%a.log
 #SBATCH --error=./run_pipeline-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]
-#SBATCH --array=0,1,2,3,4,5,6,7,8
+#SBATCH --array=3,4
 
 source activate medical
 set -e
@@ -63,7 +63,8 @@ case ${SLURM_ARRAY_TASK_ID} in
 4)
   MODEL_TYPE=loglm
   MODEL_ROOT=${CKPT_ZOOM}/base_ndec2_log1024
-  MODEL_NAME=checkpoint-500000
+#  MODEL_NAME=checkpoint-500000
+  MODEL_NAME=checkpoint-300000
   MODEL_SIZE=base
   CLS_length=1
   DEC=2
