@@ -75,10 +75,6 @@ EVAL_STEPS=50000
 DATALOADER_NUM_WORKERS=6
 LABEL_SMOOTHING_FACTOR=0
 
-if [ -z "${NUM_EXAMPLES_FOR_EPOCH}" ]; then
-  NUM_EXAMPLES_FOR_EPOCH="38944777 38944777 38944777 17901367"
-fi
-
 if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
   SHARED_NON_CASUAL_DECODER=false
 fi
@@ -159,4 +155,4 @@ main_x.py \
     --metric_for_best_model         loss \
     --greater_is_better             true \
     \
-    --num_examples_for_epoch        ${NUM_EXAMPLES_FOR_EPOCH}
+    --train_file_pattern            'epoch-*.pretrain.data'

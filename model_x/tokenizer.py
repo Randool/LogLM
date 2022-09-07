@@ -80,7 +80,12 @@ class LogTruncation:
             len_pair_ids = rest
         elif len_ids + len_pair_ids != rest:
             s = len_ids + len_pair_ids
-            len_ids, len_pair_ids = floor(rest * len_ids / s), floor(rest * len_pair_ids / s)
+            if len_ids < len_pair_ids:
+                len_pair_ids = floor(rest * len_pair_ids / s)
+                len_ids = rest - len_pair_ids
+            else:
+                len_ids = floor(rest * len_ids / s)
+                len_pair_ids = rest - len_ids
 
         return cls_len, len_ids, len_pair_ids
 
@@ -120,10 +125,10 @@ class LogLMTokenizer(BertTokenizer):
             **kwargs,
         )
         self.cls_tokens = [
-            '[CLS]', '[unused1]', '[unused2]', '[unused3]', '[unused4]', '[unused5]',
-            '[unused6]', '[unused7]', '[unused8]', '[unused9]', '[unused10]', '[unused11]'
+            '[CLS]', '[CLS1]', '[CLS2]', '[CLS3]', '[CLS4]', '[CLS5]',
+            '[CLS6]', '[CLS7]', '[CLS8]', '[CLS9]', '[CLS10]', '[CLS11]'
         ]
-        self.bos_token = self.cls_token[0]
+        self.bos_token = self.cls_token
         self.eos_token = self.sep_token
         self.cls_token_ids = [self._convert_token_to_id(t) for t in self.cls_tokens]
 

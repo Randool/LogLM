@@ -24,8 +24,8 @@ from utils import get_logger
 class DataArguments:
     trainDataPath: str = field(metadata={"help": "training data path"})
     evalDataPath: str = field(metadata={"help": "evaluation data path"})
-    num_examples_for_epoch: List[int] = field(metadata={"help": "Training example numbers of each epoch"})
     vocabPath: str = field(metadata={"help": "vocabulary path"})
+    num_examples_for_epoch: List[int] = field(default=None, metadata={"help": "Training example numbers of each epoch"})
     logPath: str = field(default=None, metadata={"help": "logger output path"})
     train_file_pattern: str = field(default="epoch-*.pretrain.data.shuf")
     dev_file_pattern: str = field(default="dev.data")

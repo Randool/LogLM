@@ -7,7 +7,6 @@ REFER TO: https://github.com/google-research/bert/blob/eedf5716ce1268e56f0a50264
 """
 import argparse
 import copy
-import functools
 import multiprocessing
 import os
 import random
@@ -23,7 +22,7 @@ from model import LogLMTokenizer
 from utils.logger import get_logger
 
 
-class MLMConfig:
+class Config:
     def __init__(self, vocabPath: str, **kwargs) -> None:
         """Define several setting parameters."""
         self.maskRatio = kwargs.pop("maskRatio", 0.15)
@@ -35,20 +34,24 @@ class MLMConfig:
         self.maxPredPerSeq = kwargs.pop("maxPredPerSeq", 20)
         self.extraSegWordsFile: str = kwargs.pop("extraSegWordsFile", None)
         self.verboseStep: int = kwargs.pop("verboseStep", None)
+        self.NAR: bool = kwargs.pop("NAR", True)
         self.vocabPath = vocabPath
 
 
-class MLMPreprocessor:
-    inputFile: str
+class Preprocessor:
+    input_file: str
     writer: TextIO
     loggerPrefix: str
 
-    def __init__(self, config: MLMConfig, logPath: str = None, debug: bool = False):
-        self.config = config
-        self.logger = get_logger(__name__, logPath)
+    def __init__(self, config_: Config, log_path: str = None):
+        self.config = config_
+        self.logger = get_logger(__name__, log_path)
         self.tokenizer = LogLMTokenizer(vocab_file=self.config.vocabPath)
         self.segmentor = thulac.thulac(user_dict=self.config.extraSegWordsFile, seg_only=True)
-        self.debug = debug
+
+    @staticmethod
+    def int_array_to_str(array: Iterable[int]) -> str:
+        return " ".join(map(str, array))
 
     @staticmethod
     def is_CJK_piece(cp: str):
@@ -86,20 +89,23 @@ class MLMPreprocessor:
     @staticmethod
     def truncate_sent_pair(tokens_a: List[str], tokens_b: List[str], max_num_tokens: int):
         """Truncates a pair of sequences to a maximum sequence length."""
-        while True:
-            total_length = len(tokens_a) + len(tokens_b)
-            if total_length <= max_num_tokens:
-                break
-
-            trunc_tokens = tokens_a if len(tokens_a) > len(tokens_b) else tokens_b
+        while len(tokens_a) + len(tokens_b) > max_num_tokens:
+            choose_a = len(tokens_a) > len(tokens_b)
+            trunc_tokens = tokens_a if choose_a else tokens_b
             assert len(trunc_tokens) >= 1
 
-            # We want to sometimes truncate from the front and sometimes from the
-            # back to add more randomness and avoid biases.
-            if random.random() < 0.5:
+            if choose_a:
                 del trunc_tokens[0]
             else:
                 trunc_tokens.pop()
+
+    @staticmethod
+    def truncate_sent(tokens: List[str], max_num_tokens: int) -> None:
+        while len(tokens) > max_num_tokens:
+            if random.random() < 0.5:
+                del tokens[0]
+            else:
+                tokens.pop()
 
     @staticmethod
     def cls_length(length: int) -> int:
@@ -189,81 +195,14 @@ class MLMPreprocessor:
 
         return sorted(pos)
 
-    def _create_sample(self, tokens_a: List[str], tokens_b: List[str]):
-        cls_len = self.cls_length(len(tokens_a) + len(tokens_b))
-        token_type_lengths = (cls_len + len(tokens_a) + 1, len(tokens_b) + 1)
+    def _create_sample(self, *args, **kwargs):
+        raise NotImplementedError
 
-        cls_token_ids = self.tokenizer.cls_token_ids[:cls_len]
-        sep_token_id = [self.tokenizer.sep_token_id]
+    def _save_sample_to_output_file(self, *args, **kwargs) -> None:
+        raise NotImplementedError
 
-        input_ids_a: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_a)
-        input_ids_b: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_b)
-        labels = cls_token_ids + input_ids_a + sep_token_id + input_ids_b + sep_token_id
-
-        if self.config.useWWM:
-            aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
-            aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
-            masked_pos = self._masked_pos(aligned_tokens_a, cls_len) + \
-                         self._masked_pos(aligned_tokens_b, cls_len + len(input_ids_a) + 1)
-        else:
-            masked_pos = self._masked_pos(input_ids_a, cls_len) + \
-                         self._masked_pos(input_ids_b, cls_len + len(input_ids_a) + 1)
-
-        return labels, masked_pos, token_type_lengths, cls_len
-
-    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
-                                    token_type_lengths: Tuple[int, int], cls_length: int, SO_label: int):
-        """ Format: `labels|masked_pos|token_type_lengths|cls_length|SO_label` """
-
-        def int_array_to_str(array: Iterable[int]) -> str:
-            return " ".join(map(str, array))
-
-        line = int_array_to_str(labels) + "|" + \
-               int_array_to_str(masked_pos) + "|" + \
-               int_array_to_str(token_type_lengths) + "|" + \
-               str(cls_length) + "|" + str(SO_label) + "\n"
-        self.writer.write(line)
-
-    def _create_and_save_instances_from_document(self, document: List[List[str]]):
-        current_chunk = []
-        current_length = 0
-        example_num = 0
-
-        for i, sent in enumerate(document):
-            current_chunk.append(sent)
-            current_length += len(sent)
-            cls_len = self.cls_length(current_length)
-
-            if i == len(document) - 1 or cls_len + current_length + 2 >= self.config.maxSeqLen:
-                if current_chunk:
-                    # `a_end` is how many segments from `current_chunk` go
-                    # into the `A` (first) sentence.
-                    if len(current_chunk) >= 2:
-                        a_end = random.randint(1, len(current_chunk) - 1)
-                    else:
-                        current_chunk = []
-                        current_length = 0
-                        continue
-
-                    tokens_a = [token for chunk in current_chunk[:a_end] for token in chunk]
-                    tokens_b = [token for chunk in current_chunk[a_end:] for token in chunk]
-
-                    self.truncate_sent_pair(tokens_a, tokens_b, self.config.maxSeqLen - 2 - cls_len)
-                    assert len(tokens_a) >= 1 and len(tokens_b) >= 1
-
-                    SO_label = 1
-                    if random.random() < 0.5:
-                        tokens_a, tokens_b = tokens_b, tokens_a
-                        SO_label = 0
-
-                    labels, masked_pos, token_type_lengths, cls_len = self._create_sample(tokens_a, tokens_b)
-                    self._save_sample_to_output_file(labels=labels, masked_pos=masked_pos,
-                                                     token_type_lengths=token_type_lengths,
-                                                     cls_length=cls_len, SO_label=SO_label)
-                    example_num += 1
-
-                current_chunk = []
-                current_length = 0
+    def _create_and_save_instances_from_document(self, document: List[List[str]]) -> None:
+        raise NotImplementedError
 
     def _create_training_instances_for_single_file(self) -> None:
         """
@@ -277,7 +216,7 @@ class MLMPreprocessor:
         document: List[List[str]] = []
         docNum = 0
 
-        with open(self.inputFile, "r") as reader:
+        with open(self.input_file, "r") as reader:
             while True:
                 line = reader.readline().strip()
                 line = self.clean_text(line)
@@ -287,24 +226,16 @@ class MLMPreprocessor:
                     if not document:
                         break
 
-                    if self.debug:
-                        print(f"=========== TEST INFO OF DOC {docNum} ===========\n")
-
                     # create instances for the document
                     self._create_and_save_instances_from_document(document)
                     docNum += 1
-
-                    if self.debug:
-                        print("************************************************\n\n")
 
                     if (
                             self.config.verboseStep is not None
                             and not (docNum % self.config.verboseStep)
                             and self.logger is not None
                     ):
-                        self.logger.info(
-                            f"{self.loggerPrefix}finish processing {docNum} documents!"
-                        )
+                        self.logger.info(f"{self.loggerPrefix}finish processing {docNum} documents!")
 
                     document = []
 
@@ -312,12 +243,136 @@ class MLMPreprocessor:
                 if tokens:
                     document.append(tokens)
 
-    def run(self, inputFile: str, outputFile: str, epoch: int):
-        self.inputFile = inputFile
-        self.writer = open(outputFile, "w")
-        self.loggerPrefix = f"epoch {epoch}, file {os.path.basename(inputFile)} ===> "
+    def run(self, input_file: str, output_file: str, epoch: int):
+        self.input_file = input_file
+        self.writer = open(output_file, "w")
+        self.loggerPrefix = f"epoch {epoch}, file {os.path.basename(input_file)} ===> "
         self._create_training_instances_for_single_file()
         self.writer.close()
+
+
+class MLMPreprocessor(Preprocessor):
+    def __init__(self, config_: Config, log_path: str = None):
+        super().__init__(config_, log_path)
+
+    def _create_sample(self, tokens_a: List[str], tokens_b: List[str]):
+        # cls_len = self.cls_length(len(tokens_a) + len(tokens_b))
+        # token_type_lengths = (cls_len + len(tokens_a) + 1, len(tokens_b) + 1)
+        token_type_lengths = (len(tokens_a) + 1, len(tokens_b) + 1)
+
+        # cls_token_ids = self.tokenizer.cls_token_ids[:cls_len]
+        sep_token_id = [self.tokenizer.sep_token_id]
+
+        input_ids_a: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_a)
+        input_ids_b: List[int] = self.tokenizer.convert_tokens_to_ids(tokens_b)
+        labels = input_ids_a + sep_token_id + input_ids_b + sep_token_id
+
+        if self.config.useWWM:
+            aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
+            aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
+            masked_pos = self._masked_pos(aligned_tokens_a, 0) + \
+                         self._masked_pos(aligned_tokens_b, 0 + len(input_ids_a) + 1)
+        else:
+            masked_pos = self._masked_pos(input_ids_a, 0) + \
+                         self._masked_pos(input_ids_b, 0 + len(input_ids_a) + 1)
+
+        return labels, masked_pos, token_type_lengths
+
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
+                                    token_type_lengths: Tuple[int, int], SO_label: int) -> None:
+        """ Format: `labels|masked_pos|token_type_lengths|SO_label` """
+        line = self.int_array_to_str(labels) + "|" + \
+               self.int_array_to_str(masked_pos) + "|" + \
+               self.int_array_to_str(token_type_lengths) + "|" + \
+               str(SO_label) + "\n"
+
+        self.writer.write(line)
+
+    def _create_and_save_instances_from_document(self, document: List[List[str]]) -> None:
+        """
+        :param document: List of tokenized sentence
+        """
+        current_chunk = []
+        current_length = 0
+        example_num = 0
+
+        for i, sent in enumerate(document):
+            current_chunk.append(sent)
+            current_length += len(sent)
+            # cls_len = self.cls_length(current_length)
+
+            if i == len(document) - 1 or current_length + 2 >= self.config.maxSeqLen:
+                if current_chunk:
+                    # `a_end` is how many segments from `current_chunk` go
+                    # into the `A` (first) sentence.
+                    if len(current_chunk) >= 2:
+                        a_end = random.randint(1, len(current_chunk) - 1)
+                    else:
+                        current_chunk = []
+                        current_length = 0
+                        continue
+
+                    tokens_a = [token for chunk in current_chunk[:a_end] for token in chunk]
+                    tokens_b = [token for chunk in current_chunk[a_end:] for token in chunk]
+
+                    self.truncate_sent_pair(tokens_a, tokens_b, self.config.maxSeqLen - 2)
+                    assert len(tokens_a) >= 1 and len(tokens_b) >= 1
+
+                    SO_label = 1
+                    if self.config.NAR and random.random() < 0.5:
+                        tokens_a, tokens_b = tokens_b, tokens_a
+                        SO_label = 0
+
+                    labels, masked_pos, token_type_lengths = self._create_sample(tokens_a, tokens_b)
+                    self._save_sample_to_output_file(labels=labels, masked_pos=masked_pos,
+                                                     token_type_lengths=token_type_lengths, SO_label=SO_label)
+                    example_num += 1
+
+                current_chunk = []
+                current_length = 0
+
+
+class ARPreprocessor(Preprocessor):
+    def __init__(self, config_: Config, log_path: str = None):
+        super().__init__(config_, log_path)
+
+    def _create_sample(self, tokens: List[str]):
+        sep_token_id = [self.tokenizer.sep_token_id]
+        input_ids: List[int] = self.tokenizer.convert_tokens_to_ids(tokens)
+        labels = input_ids + sep_token_id
+
+        if self.config.useWWM:
+            aligned_tokens = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens)]
+            masked_pos = self._masked_pos(aligned_tokens, 0)
+        else:
+            masked_pos = self._masked_pos(input_ids, 0)
+
+        return labels, masked_pos
+
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int]):
+        line = self.int_array_to_str(labels) + "|" + self.int_array_to_str(masked_pos)
+        self.writer.write(line + "\n")
+
+    def _create_and_save_instances_from_document(self, document: List[List[str]]):
+        """
+        :param document: List of tokenized sentence
+        """
+        current_chunk = []
+        current_length = 0
+
+        for i, sent in enumerate(document):
+            current_chunk.append(sent)
+            current_length += len(sent)
+
+            if (i == len(document) - 1 or current_length + 2 >= self.config.maxSeqLen) and current_chunk:
+                tokens = [token for chunk in current_chunk for token in chunk]
+                self.truncate_sent(tokens, self.config.maxSeqLen)
+
+                labels, masked_pos = self._create_sample(tokens)
+                self._save_sample_to_output_file(labels, masked_pos)
+
+                current_chunk = [] if current_chunk else current_chunk
+                current_length = 0
 
 
 def parse_args(args: List[str] = None):
@@ -331,32 +386,21 @@ def parse_args(args: List[str] = None):
     parser.add_argument("--WWM", action="store_true", help="whether to use the Whole Word Mask mechanism")
     parser.add_argument("--synonym", action="store_true", help="whether to use synonym or [MASK]")
     parser.add_argument("--maxSeqLen", type=int, default=512, help="maximum sequence length")
-    parser.add_argument("--inputPath", "-i", type=str, required=True, help="input path to preprocess")
-    parser.add_argument("--outputPath", "-o", type=str, required=True, help="output path to save")
+    parser.add_argument("--input_path", "-i", type=str, required=True, help="input path to preprocess")
+    parser.add_argument("--output_path", "-o", type=str, required=True, help="output path to save")
     parser.add_argument("--shortSeqProb", type=float, default=0.1, help="the probability of using short sequence")
     parser.add_argument("--maxPredPerSeq", type=int, default=20, help="the maximum tokens number to mask")
     parser.add_argument("--extraSegWordsFile", type=str, default=None,
                         help="Additional dict file for the Chinese tokenizer")
     parser.add_argument("--verboseStep", type=int, default=None,
                         help="the verbose step. None means displaying nothing.")
+    parser.add_argument("--NAR", action="store_true", help="Non-autoregressive mode")
     parser.add_argument("--logPath", type=str, default=None, help="path of log")
     parser.add_argument("--processNum", type=int, default=1, help="process number")
     parser.add_argument("--vocabPath", "-v", type=str, required=True, help="vocabulary path")
     parser.add_argument("--seed", type=int, default=42, help="seed")
 
     return parser.parse_args(args)
-
-
-def trace_unhandled_exceptions(func):
-    @functools.wraps(func)
-    def wrapped_func(*args, **kwargs):
-        try:
-            func(*args, **kwargs)
-        except Exception:
-            print("Exception in " + func.__name__)
-            traceback.print_exc()
-
-    return wrapped_func
 
 
 if __name__ == "__main__":
@@ -370,61 +414,61 @@ if __name__ == "__main__":
 
     logger = get_logger("main", logPath)
 
-    logger.info(f"preprocessing data from: {args.inputPath}")
-    logger.info(f"saving to: {args.outputPath}")
+    logger.info(f"preprocessing data from: {args.input_path}")
+    logger.info(f"saving to: {args.output_path}")
+
+    config = Config(
+        maskRatio=args.maskRatio,
+        useWWM=args.WWM,
+        useSynonym=args.synonym,
+        maxSeqLen=args.maxSeqLen,
+        shortSeqProb=args.shortSeqProb,
+        maxPredPerSeq=args.maxPredPerSeq,
+        extraSegWordsFile=args.extraSegWordsFile,
+        verboseStep=args.verboseStep,
+        vocabPath=args.vocabPath,
+        NAR=args.NAR,
+        processNum=args.processNum,
+    )
 
     if args.type.lower() == "mlm":
-        config = MLMConfig(
-            maskRatio=args.maskRatio,
-            useWWM=args.WWM,
-            useSynonym=args.synonym,
-            maxSeqLen=args.maxSeqLen,
-            shortSeqProb=args.shortSeqProb,
-            maxPredPerSeq=args.maxPredPerSeq,
-            extraSegWordsFile=args.extraSegWordsFile,
-            verboseStep=args.verboseStep,
-            vocabPath=args.vocabPath,
-            processNum=args.processNum,
-        )
         Processor = MLMPreprocessor
     else:
-        raise NotImplementedError()
+        Processor = ARPreprocessor
 
 
-    @trace_unhandled_exceptions
-    def wrapper(config_: MLMConfig, logpath_: str, inputFile_: str, outputFile_: str, epoch_: int):
+    def wrapper(config_: Config, logpath_: str, input_file_: str, output_file_: str, epoch_: int):
         try:
             processor = Processor(config_, logpath_)
-            processor.run(inputFile_, outputFile_, epoch_)
-
+            processor.run(input_file_, output_file_, epoch_)
             logger.info(f"{processor.loggerPrefix} finished successfully!")
 
         except Exception as e:
-            logger.info(f"Process: epoch {epoch_}, file {os.path.basename(inputFile_)}")
-            raise Exception(e)
+            print(e)
+            traceback.print_exc()
 
 
-    # get all inputFiles; each process deals with one input file.
-    inputFiles = []
-    if os.path.isfile(args.inputPath):
-        inputFiles.append(args.inputPath)
+    # get all input_files; each process deals with one input file.
+    input_files = []
+    if os.path.isfile(args.input_path):
+        input_files.append(args.input_path)
     else:
-        for filename in os.listdir(args.inputPath):
+        for filename in os.listdir(args.input_path):
             if not filename.startswith("."):
-                filepath = join(args.inputPath, filename)
+                filepath = join(args.input_path, filename)
                 if os.path.isfile(filepath):
-                    inputFiles.append(filepath)
+                    input_files.append(filepath)
 
     # crate directory to save each epoch data
-    if not os.path.exists(args.outputPath):
-        os.makedirs(args.outputPath)
+    if not os.path.exists(args.output_path):
+        os.makedirs(args.output_path)
 
     for epoch in range(args.dupEpochNum):
-        epochPath = join(args.outputPath, f"epoch-{epoch}")
+        epochPath = join(args.output_path, f"epoch-{epoch}")
         if not os.path.exists(epochPath):
             os.makedirs(epochPath)
 
-    total = args.dupEpochNum * len(inputFiles)
+    total = args.dupEpochNum * len(input_files)
     poolSize = min(args.processNum, total, multiprocessing.cpu_count())
     logger.info(f"Process number: {poolSize}")
 
@@ -435,27 +479,28 @@ if __name__ == "__main__":
             if epoch == args.dupEpochNum - 1:
                 curr_config.maxSeqLen = 512
 
-            for index, inputFile in enumerate(inputFiles):
-                outputFile = join(args.outputPath, f"epoch-{epoch}", os.path.basename(inputFile))
+            for index, input_file in enumerate(input_files):
+                output_file = join(args.output_path, f"epoch-{epoch}", os.path.basename(input_file))
                 logger.info(
-                    f"launching worker (epoch {epoch}, file {os.path.basename(inputFile)})\n"
-                    f"      >>> input file: {inputFile}\n"
-                    f"      >>> output file: {outputFile}"
+                    f"launching worker (epoch {epoch}, file {os.path.basename(input_file)})\n"
+                    f"      >>> input file:  {input_file}\n"
+                    f"      >>> output file: {output_file}"
                 )
-                pool.apply_async(wrapper, args=(curr_config, logPath, inputFile, outputFile, epoch))
+                pool.apply_async(wrapper, args=(curr_config, logPath, input_file, output_file, epoch),
+                                 error_callback=lambda value: print("[Error]", value))
 
         pool.close()
         pool.join()
 
     else:
         for epoch in range(args.dupEpochNum):
-            for index, inputFile in enumerate(inputFiles):
-                outputFile = join(join(args.outputPath, f"epoch-{epoch}"), os.path.basename(inputFile))
+            for index, input_file in enumerate(input_files):
+                output_file = join(join(args.output_path, f"epoch-{epoch}"), os.path.basename(input_file))
                 logger.info(
-                    f"launching worker (epoch {epoch}, file {os.path.basename(inputFile)})\n"
-                    f"      >>> input file: {inputFile}\n"
-                    f"      >>> output file: {outputFile}"
+                    f"launching worker (epoch {epoch}, file {os.path.basename(input_file)})\n"
+                    f"      >>> input file: {input_file}\n"
+                    f"      >>> output file: {output_file}"
                 )
-                wrapper(config, logPath, inputFiles[index], outputFile, epoch)
+                wrapper(config, logPath, input_files[index], output_file, epoch)
 
     logger.info("Data preprocessing finished!")

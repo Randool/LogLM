@@ -5,15 +5,14 @@
 #SBATCH --mem=30G
 #SBATCH --output=./preprocess-%A.log
 #SBATCH --error=./preprocess-%A.log
-#SBATCH --exclude=gqxx-01-[027,067,078,118,175]
 
 set -e
 
-TYPE='MLM'
+TYPE='AR'
 DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 
-NORMALIZED_TRAIN="${DATA_PATH}/normalized"
-NORMALIZED_DEV="${DATA_PATH}/normalized_dev"
+NORMALIZED_TRAIN="${DATA_PATH}/normalized/train"
+NORMALIZED_DEV="${DATA_PATH}/normalized/dev"
 
 PROCESSED_TRAIN="${DATA_PATH}/processed/train"
 PROCESSED_DEV="${DATA_PATH}/processed/dev"
@@ -24,10 +23,10 @@ EPOCH=10
 SEED=42
 
 MERGE='true' # true | false
-SHUFFLE='true' # true | false
+SHUFFLE='false' # true | false
 RELEASE_CACHE='true' # true | false
 
-VOCAB_PATH="${HOME}/Projects/LogLM/exp/tokenizer/vocab.txt"
+VOCAB_PATH="${HOME}/Projects/LogLM/preprocess_data/tokenizer/vocab.txt"
 
 
 PYTHONPATH=.. \
@@ -39,24 +38,8 @@ python preprocess.py \
     --vocabPath         ${VOCAB_PATH} \
     --maxSeqLen         ${MAX_SEQ_LEN} \
     --WWM \
-    --inputPath         ${NORMALIZED_TRAIN} \
-    --outputPath        ${PROCESSED_TRAIN} \
-    --processNum        30 \
-    --maskRatio         0.15 \
-    --logPath           "${DATA_PATH}/logs" \
-    --seed              ${SEED}
-
-PYTHONPATH=.. \
-python preprocess.py \
-    --type              ${TYPE} \
-    --maxPredPerSeq     ${MAX_PRED_PER_SEQ} \
-    --dupEpochNum       1 \
-    --verboseStep       5000 \
-    --vocabPath         ${VOCAB_PATH} \
-    --maxSeqLen         ${MAX_SEQ_LEN} \
-    --WWM \
-    --inputPath         ${NORMALIZED_DEV} \
-    --outputPath        ${PROCESSED_DEV} \
+    --input_path        ${NORMALIZED_TRAIN} \
+    --output_path       ${PROCESSED_TRAIN} \
     --processNum        30 \
     --maskRatio         0.15 \
     --logPath           "${DATA_PATH}/logs" \
@@ -79,6 +62,22 @@ if [[ ${MERGE} == 'true' ]]; then
 fi
 
 # Dev
+PYTHONPATH=.. \
+python preprocess.py \
+    --type              ${TYPE} \
+    --maxPredPerSeq     ${MAX_PRED_PER_SEQ} \
+    --dupEpochNum       1 \
+    --verboseStep       5000 \
+    --vocabPath         ${VOCAB_PATH} \
+    --maxSeqLen         ${MAX_SEQ_LEN} \
+    --WWM \
+    --input_path         ${NORMALIZED_DEV} \
+    --output_path        ${PROCESSED_DEV} \
+    --processNum        30 \
+    --maskRatio         0.15 \
+    --logPath           "${DATA_PATH}/logs" \
+    --seed              ${SEED}
+
 cat ${PROCESSED_DEV}/*/* > "${PROCESSED_DEV}/dev.data"
 
 if [[ ${RELEASE_CACHE} == 'true' ]]; then
@@ -86,17 +85,24 @@ if [[ ${RELEASE_CACHE} == 'true' ]]; then
 fi
 
 
-# Shuffle lines to prevent build random index of lines
-if [[ ${MERGE} == 'true' && ${SHUFFLE} == 'true' ]]; then
-    for i in `seq 0 $((${EPOCH} - 1))`; do
-        SHUF_SEED=$((${SEED} + ${i}))
-        raw_file="${PROCESSED_TRAIN}/epoch-${i}.pretrain.data"
+# # Shuffle lines to prevent build random index of lines
+# if [[ ${MERGE} == 'true' && ${SHUFFLE} == 'true' ]]; then
+#     for i in `seq 0 $((${EPOCH} - 1))`; do
+#         SHUF_SEED=$((${SEED} + ${i}))
+#         raw_file="${PROCESSED_TRAIN}/epoch-${i}.pretrain.data"
 
-        echo "Shuffle [${SHUF_SEED}]: ${raw_file}"
-        shuf --random-source=<(yes ${SHUF_SEED}) "${raw_file}" > "${raw_file}.shuf"
+#         echo "Shuffle [${SHUF_SEED}]: ${raw_file}"
+#         shuf --random-source=<(yes ${SHUF_SEED}) "${raw_file}" > "${raw_file}.shuf"
 
-        if [[ ${RELEASE_CACHE} == 'true' ]]; then
-            rm ${raw_file}
-        fi
-    done
-fi
+#         if [[ ${RELEASE_CACHE} == 'true' ]]; then
+#             rm ${raw_file}
+#         fi
+#     done
+# fi
+
+# Build index
+python ../tools/create_dataset_index.py \
+    --inputs "${PROCESSED_TRAIN}"'/*.pretrain.data'
+
+python ../tools/create_dataset_index.py \
+    --inputs "${PROCESSED_DEV}"'/dev.data'

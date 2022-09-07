@@ -4,6 +4,7 @@ exp
 debug*
 .stignore
 .stfolder
+figs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

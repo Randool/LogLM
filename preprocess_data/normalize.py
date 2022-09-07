@@ -7,6 +7,7 @@ import argparse
 import os
 import random
 from os.path import join, expanduser
+from typing import List
 
 from tqdm import tqdm
 
@@ -26,40 +27,42 @@ def parse():
     _dev_normalized_dir = join(_corpus_dir, "normalized_dev")
 
     parser.add_argument("--type", type=str, default="mlm", help="the normalizer type")
-    parser.add_argument("--inputPath", "-i", type=str, default=_raw_corpus_dir, help="input data path")
-    parser.add_argument("--outputPath", "-o", type=str, default=_normalized_dir, help="output path for train")
+    parser.add_argument("--input_path", "-i", type=str, default=_raw_corpus_dir, help="input data path")
+    parser.add_argument("--output_path", "-o", type=str, default=_normalized_dir, help="output path for train")
     parser.add_argument("--dev_output_path", type=str, default=_dev_normalized_dir, help="output path for dev")
+    parser.add_argument("--exclude_files", "-x", type=str, nargs="*", default=["drug_clean.txt"], help="File excluded")
     parser.add_argument("--rate", type=float, default=1.0, help="the data rate to select")
-    parser.add_argument("--docNumPerFile", type=int, default=100000,
+    parser.add_argument("--num_doc_pre_file", "-n", type=int, default=100000,
                         help="the document number per file. -1 means saving all documents into one single file.")
-    parser.add_argument("--num_dev_doc", type=int, default=10000, help="Number of doc for dev")
+    parser.add_argument("--num_dev_doc", type=int, default=8000, help="Number of doc for dev")
     parser.add_argument("--seed", type=int, default=42, help="seed")
 
     return parser.parse_args()
 
 
 class MLMNormalizer:
-    def __init__(self, inputPath: str, outputPath: str, dev_output_path: str, rate: float,
-                 num_dev_doc: int, docNumPerFile: int = -1, seed=42):
+    def __init__(self, input_path: str, output_path: str, dev_output_path: str, exclude_files: List[str],
+                 rate: float, num_dev_doc: int, num_doc_pre_file: int = -1, seed=42):
         """This normalizer is for MLM task.
         NOTE: This normalizer supports to select a subset of total examples.
 
         Args:
             rate (float): the rate of examples to select.
         """
-        self.inputPath = inputPath
-        self.outputPath = outputPath
+        self.input_path = input_path
+        self.output_path = output_path
         self.dev_output_path = dev_output_path
+        self.exclude_files = exclude_files
         self.num_dev_doc = num_dev_doc
-        self.docNumPerFile = docNumPerFile
+        self.num_doc_pre_file = num_doc_pre_file
 
         self.rate = rate
 
-        os.makedirs(outputPath, exist_ok=True)
+        os.makedirs(output_path, exist_ok=True)
         os.makedirs(dev_output_path, exist_ok=True)
 
         self.doc_file_id = 0
-        self.outf = open(os.path.join(outputPath, f"doc.{self.doc_file_id}"), "w")
+        self.outf = open(os.path.join(output_path, f"doc.{self.doc_file_id}"), "w")
 
         self.dev_buff = []
         random.seed(seed)
@@ -69,22 +72,22 @@ class MLMNormalizer:
             self.outf.close()
 
     @staticmethod
-    def _countLines(inputFile: str) -> int:
+    def _count_lines(input_file: str) -> int:
         cnt = 0
-        with open(inputFile, "r") as inf:
+        with open(input_file, "r") as inf:
             for line in inf.readlines():
                 if line.strip():
                     cnt += 1
         return cnt
 
-    def _runHelper(self, inputFile: str, outputPath: str):
+    def _run_helper(self, input_file: str, output_path: str):
         """Normalize for the specific file."""
-        total = self._countLines(inputFile)
+        total = self._count_lines(input_file)
         logger.info(f"total: {total} | selected: {int(total * self.rate)}")
         doc_cnt = 0
         train_doc_cnt = 0
 
-        with open(inputFile, "r") as inf:
+        with open(input_file, "r") as inf:
             for line in tqdm(inf.readlines(), ncols=64):
                 line = line.strip()
                 if line:
@@ -131,31 +134,35 @@ class MLMNormalizer:
                         train_doc_cnt += 1
                         self.outf.write(chunk)
 
-                        if (self.docNumPerFile > -1) and not (train_doc_cnt % self.docNumPerFile):
+                        if (self.num_doc_pre_file > -1) and not (train_doc_cnt % self.num_doc_pre_file):
                             self.outf.close()
                             self.doc_file_id += 1
-                            self.outf = open(os.path.join(outputPath, f"doc.{self.doc_file_id}"), "w")
+                            self.outf = open(os.path.join(output_path, f"doc.{self.doc_file_id}"), "w")
 
                     doc_cnt += 1
 
     def run(self):
         # collect all the input files
-        if os.path.isdir(self.inputPath):
-            inputFiles = [
-                os.path.join(self.inputPath, file)
-                for file in os.listdir(self.inputPath)
-                if not file.startswith(".") and os.path.isfile(os.path.join(self.inputPath, file))
+        if os.path.isdir(self.input_path):
+            input_files = [
+                os.path.join(self.input_path, file)
+                for file in os.listdir(self.input_path)
+                if (
+                        not file.startswith(".")
+                        and os.path.isfile(os.path.join(self.input_path, file))
+                        and file not in self.exclude_files
+                )
             ]
         else:
-            inputFiles = [self.inputPath]
-        inputFiles = sorted(inputFiles)
+            input_files = [self.input_path]
+        input_files = sorted(input_files)
 
         # normalize for each file, respectively
-        os.makedirs(self.outputPath, exist_ok=True)
+        os.makedirs(self.output_path, exist_ok=True)
 
-        for inputFile in inputFiles:
-            logger.info(f"normalize file: {inputFile}")
-            self._runHelper(inputFile, self.outputPath)
+        for input_file in input_files:
+            logger.info(f"normalize file: {input_file}")
+            self._run_helper(input_file, self.output_path)
 
         self.outf.close()
 
@@ -167,18 +174,17 @@ class MLMNormalizer:
 
 if __name__ == "__main__":
     args = parse()
-
     random.seed(args.seed)
-
     logger = get_logger("main")
 
-    logger.info(f"normalizing data from: {args.inputPath} with a rate of {args.rate}")
-    logger.info(f"saving to: {args.outputPath}")
+    logger.info(f"normalizing data from: {args.input_path} with a rate of {args.rate}")
+    logger.info(f"saving to: {args.output_path}")
 
     if args.type.lower() == "mlm":
         normalizer = MLMNormalizer(
-            inputPath=args.inputPath, outputPath=args.outputPath, dev_output_path=args.dev_output_path,
-            rate=args.rate, num_dev_doc=args.num_dev_doc, docNumPerFile=args.docNumPerFile, seed=args.seed
+            input_path=args.input_path, output_path=args.output_path, dev_output_path=args.dev_output_path,
+            exclude_files=args.exclude_files, rate=args.rate, num_dev_doc=args.num_dev_doc,
+            num_doc_pre_file=args.num_doc_pre_file, seed=args.seed
         )
     else:
         raise NotImplementedError()

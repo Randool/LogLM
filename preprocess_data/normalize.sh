@@ -7,15 +7,15 @@ set -e
 TYPE='MLM'
 DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 RAW_CORPORA_PATH="${DATA_PATH}/15.medical_plm_corpus"
-TRAIN_NORMALIZED="${DATA_PATH}/normalized"
-DEV_NORMALIZED="${DATA_PATH}/normalized_dev"
+TRAIN_NORMALIZED="${DATA_PATH}/normalized/train"
+DEV_NORMALIZED="${DATA_PATH}/normalized/dev"
 RATE=1
 
 PYTHONPATH=.. python normalize.py \
-    --type            ${TYPE} \
-    --inputPath       ${RAW_CORPORA_PATH} \
-    --outputPath      ${TRAIN_NORMALIZED} \
-    --dev_output_path ${DEV_NORMALIZED} \
-    --docNumPerFile   100000 \
-    --num_dev_doc     10000 \
-    --rate ${RATE}
+    --type              ${TYPE} \
+    --input_path        ${RAW_CORPORA_PATH} \
+    --output_path       ${TRAIN_NORMALIZED} \
+    --dev_output_path   ${DEV_NORMALIZED} \
+    --num_doc_pre_file  100000 \
+    --num_dev_doc       8000 \
+    --rate              ${RATE}
