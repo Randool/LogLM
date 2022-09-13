@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:2
-#SBATCH --mem=40G
+#SBATCH --mem=50G
 #SBATCH --output=./dist_launch_tiny-%A-%a.log
 #SBATCH --error=./dist_launch_tiny-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]

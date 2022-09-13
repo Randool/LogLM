@@ -12,7 +12,7 @@ def indexing(input_file: str, output_file: str):
             line = f.readline()
 
     with open(output_file, "w", encoding="utf8") as f:
-        f.write(" ".join(map(str, indexes)))
+        f.write("\n".join(map(str, indexes)))
 
     print(f"{input_file} done")
 
@@ -24,8 +24,9 @@ def main():
     args = parser.parse_args()
 
     for input_file in glob.glob(args.inputs):
-        output_file = input_file + args.index_suffix
-        indexing(input_file, output_file)
+        if not input_file.endswith(args.index_suffix):
+            output_file = input_file + args.index_suffix
+            indexing(input_file, output_file)
 
 
 if __name__ == "__main__":

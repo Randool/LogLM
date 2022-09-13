@@ -164,7 +164,7 @@ class CollateFn:
         if is_legacy_format and self.nar_mode:
             inputs["token_type_ids"] = torch.tensor(token_type_ids, dtype=torch.long)
             inputs["sentence_pair_label"] = torch.tensor(SO_label, dtype=torch.long)
-            inputs["mask_token_id"] = self.mask_token_id
+            # inputs["mask_token_id"] = self.mask_token_id
 
         return inputs
 

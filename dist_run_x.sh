@@ -150,7 +150,7 @@ main_x.py \
     --eval_steps                    ${EVAL_STEPS} \
     --dataloader_num_workers        ${DATALOADER_NUM_WORKERS} \
     --label_smoothing_factor        ${LABEL_SMOOTHING_FACTOR} \
-    --ddp_find_unused_parameters    true \
+    --ddp_find_unused_parameters    false \
     --load_best_model_at_end        true \
     --metric_for_best_model         loss \
     --greater_is_better             true \

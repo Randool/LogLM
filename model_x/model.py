@@ -175,7 +175,11 @@ class LogLM(BartPretrainedModel):
                 return_dict=return_dict,
             )
             # Mask other places other than cls
-            encoder_outputs.last_hidden_state = encoder_outputs.last_hidden_state * cls_type_ids.unsqueeze(-1).float()
+            max_cls_len = cls_type_ids.sum(dim=-1).max()
+            encoder_outputs.last_hidden_state = (
+                encoder_outputs.last_hidden_state * cls_type_ids.unsqueeze(-1).float()
+            )[:, :max_cls_len]
+            attention_mask = cls_type_ids[:, :max_cls_len]
 
         # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
         elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
@@ -392,6 +396,11 @@ class LogLMForConditionalGeneration(BartPretrainedModel):
         model_kwargs["encoder_outputs"]: ModelOutput = encoder(**encoder_kwargs)
 
         if cls_type_ids is not None:
-            model_kwargs["encoder_outputs"].last_hidden_state *= cls_type_ids.unsqueeze(-1).float()
+            # model_kwargs["encoder_outputs"].last_hidden_state *= cls_type_ids.unsqueeze(-1).float()
+            max_cls_len = cls_type_ids.sum(dim=-1).max()
+            model_kwargs["encoder_outputs"].last_hidden_state = (
+                model_kwargs["encoder_outputs"].last_hidden_state * cls_type_ids.unsqueeze(-1).float()
+            )[:, :max_cls_len]
+            model_kwargs["attention_mask"] = cls_type_ids[:, :max_cls_len]
 
         return model_kwargs
