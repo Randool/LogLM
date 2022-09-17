@@ -6,6 +6,7 @@
 @Version     :  1.0
 @Description :  BertTokenizer with variable length of `[CLS]`
 """
+from contextlib import contextmanager
 import json
 import os
 from itertools import chain
@@ -47,7 +48,7 @@ class LogTruncation:
     def _f_derivative(self, x: float) -> float:
         return 1 + self._ln_base_inverse / x
 
-    def get_cls_len(self, len_ids: float, len_pair_ids: float) -> int:
+    def get_cls_len(self, len_ids: float, len_pair_ids: float = 0) -> int:
         return ceil(log(max(1.5, len_ids + len_pair_ids), self._log_base))
 
     def truncated_length(
@@ -366,3 +367,10 @@ class LogLMTokenizer(BertTokenizer):
             json.dump(config, f)
 
         return returned
+
+    @contextmanager
+    def as_target_tokenizer(self):
+        anchored_length = self.anchored_length
+        self.set_log_base_or_anchored_length(anchored_length=1)
+        yield
+        self.set_log_base_or_anchored_length(anchored_length=anchored_length)

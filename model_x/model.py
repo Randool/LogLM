@@ -124,6 +124,53 @@ class LogLM(BartPretrainedModel):
     def get_decoder(self):
         return self.decoder
 
+    def encoder_forward(
+            self,
+            input_ids=None,
+            attention_mask=None,
+            cls_type_ids=None,
+            head_mask=None,
+            encoder_outputs=None,
+            inputs_embeds=None,
+            use_cache=None,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
+    ):
+        """ Just do encoder forward pass """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                head_mask=head_mask,
+                inputs_embeds=inputs_embeds,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+            # Mask other places other than cls
+            max_cls_len = cls_type_ids.sum(dim=-1).max()
+            encoder_outputs.last_hidden_state = (
+                encoder_outputs.last_hidden_state * cls_type_ids.unsqueeze(-1).float()
+            )[:, :max_cls_len]
+
+        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
+        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
+            encoder_outputs = BaseModelOutput(
+                last_hidden_state=encoder_outputs[0],
+                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
+                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
+            )
+
+        return encoder_outputs
+
     def forward(
             self,
             input_ids=None,
@@ -164,30 +211,22 @@ class LogLM(BartPretrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if encoder_outputs is None:
-            encoder_outputs = self.encoder(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            # Mask other places other than cls
-            max_cls_len = cls_type_ids.sum(dim=-1).max()
-            encoder_outputs.last_hidden_state = (
-                encoder_outputs.last_hidden_state * cls_type_ids.unsqueeze(-1).float()
-            )[:, :max_cls_len]
-            attention_mask = cls_type_ids[:, :max_cls_len]
+        encoder_outputs = self.encoder_forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            cls_type_ids=cls_type_ids,
+            head_mask=head_mask,
+            encoder_outputs=encoder_outputs,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
 
-        # If the user passed a tuple for encoder_outputs, we wrap it in a BaseModelOutput when return_dict=True
-        elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
-            encoder_outputs = BaseModelOutput(
-                last_hidden_state=encoder_outputs[0],
-                hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
-                attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
-            )
+        if encoder_outputs.last_hidden_state.shape[1] != attention_mask.shape[1]:
+            max_cls_len = encoder_outputs.last_hidden_state.shape[1]
+            attention_mask = cls_type_ids[:, :max_cls_len]
 
         # decoder outputs consists of (dec_features, past_key_value, dec_hidden, dec_attn)
         decoder_outputs = self.decoder(

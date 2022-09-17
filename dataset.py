@@ -109,7 +109,7 @@ def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_
     ids = trim_ids(token_ids, len_ids, False, True, direct="any")
 
     input_ids = cls_ids + [x if x > 0 else mask_token_id for x in ids]
-    labels = cls_ids + [abs(x) for x in ids]
+    labels = cls_ids[:1] + [abs(x) for x in ids]
     cls_type_ids = [1] * cls_len + [0] * len_ids
 
     return Item(
@@ -131,6 +131,7 @@ class CollateFn:
         input_ids, token_type_ids, cls_type_ids, labels, SO_label = [], [], [], [], []
         attention_mask = []
         max_length = 0
+        label_max_length = 0
         is_legacy_format = batch[0].token_type_ids is not None
 
         for items in batch:
@@ -138,6 +139,7 @@ class CollateFn:
             cls_type_ids.append(items.cls_type_ids)
             labels.append(items.labels)
             max_length = max(max_length, len(items.input_ids))
+            label_max_length = max(label_max_length, len(items.labels))
 
             if is_legacy_format:
                 token_type_ids.append(items.token_type_ids)
@@ -146,10 +148,11 @@ class CollateFn:
         for i in range(len(batch)):
             length = len(input_ids[i])
             pad_length = max_length - length
+            label_pad_length = label_max_length - len(labels[i])
             input_ids[i] += [self.pad_token_id] * pad_length
             attention_mask.append([1] * length + [0] * pad_length)
             cls_type_ids[i] += [0] * pad_length
-            labels[i] += [-100] * pad_length if self.nar_mode else [self.pad_token_id] * pad_length
+            labels[i] += [-100] * label_pad_length if self.nar_mode else [self.pad_token_id] * label_pad_length
 
             if is_legacy_format:
                 token_type_ids[i] += [0] * pad_length
