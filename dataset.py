@@ -122,10 +122,11 @@ def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_
 
 
 class CollateFn:
-    def __init__(self, mask_token_id: int, pad_token_id: int, nar_mode: bool):
+    def __init__(self, mask_token_id: int, pad_token_id: int, nar_mode: bool, return_cls_ids: bool):
         self.mask_token_id = mask_token_id
         self.pad_token_id = pad_token_id
         self.nar_mode = nar_mode  # Non-autoregressive mode
+        self.return_cls_ids = return_cls_ids
 
     def __call__(self, batch: List[Item]) -> dict:
         input_ids, token_type_ids, cls_type_ids, labels, SO_label = [], [], [], [], []
@@ -136,7 +137,8 @@ class CollateFn:
 
         for items in batch:
             input_ids.append(items.input_ids)
-            cls_type_ids.append(items.cls_type_ids)
+            if self.return_cls_ids:
+                cls_type_ids.append(items.cls_type_ids)
             labels.append(items.labels)
             max_length = max(max_length, len(items.input_ids))
             label_max_length = max(label_max_length, len(items.labels))
@@ -151,7 +153,8 @@ class CollateFn:
             label_pad_length = label_max_length - len(labels[i])
             input_ids[i] += [self.pad_token_id] * pad_length
             attention_mask.append([1] * length + [0] * pad_length)
-            cls_type_ids[i] += [0] * pad_length
+            if self.return_cls_ids:
+                cls_type_ids[i] += [0] * pad_length
             labels[i] += [-100] * label_pad_length if self.nar_mode else [self.pad_token_id] * label_pad_length
 
             if is_legacy_format:
@@ -160,9 +163,11 @@ class CollateFn:
         inputs = {
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
-            "cls_type_ids": torch.tensor(cls_type_ids, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
         }
+
+        if self.return_cls_ids:
+            inputs["cls_type_ids"] = torch.tensor(cls_type_ids, dtype=torch.long)
 
         if is_legacy_format and self.nar_mode:
             inputs["token_type_ids"] = torch.tensor(token_type_ids, dtype=torch.long)
@@ -174,13 +179,13 @@ class CollateFn:
 
 class DatasetForShuffledFile(IterableDataset):
     def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, num_examples: int = None, log_base=2,
-                 nar_mode=True):
+                 nar_mode=True, return_cls_ids=True):
         self.data_file = data_file
         self.num_examples = num_examples
         self.nar_mode = nar_mode
 
         self._trunc = LogTruncation(log_base=log_base)
-        self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode)
+        self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode, return_cls_ids)
 
     def __iter__(self):
         with open(self.data_file, "r") as f:
@@ -202,13 +207,13 @@ class DatasetForShuffledFile(IterableDataset):
 
 class DatasetWithIndex(Dataset):
     def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, log_base=2,
-                 nar_mode=False, index_suffix: str = ".index"):
+                 nar_mode=False, return_cls_ids=True, index_suffix: str = ".index"):
         self.data_file = data_file
         self.indexes = self.parse_index(data_file + index_suffix)
         self.nar_mode = nar_mode
 
         self._trunc = LogTruncation(log_base=log_base)
-        self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode)
+        self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode, return_cls_ids)
 
     @staticmethod
     def parse_index(index_file: str) -> List[int]:

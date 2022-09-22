@@ -31,6 +31,7 @@ class DataArguments:
     dev_file_pattern: str = field(default="dev.data")
 
     log_base: float = field(default=2, metadata={"help": "Log base"})
+    anchored_length: int = field(default=-1, metadata={"help": "Anchor length"})
 
     @property
     def train_data_files(self) -> List[str]:
@@ -45,7 +46,7 @@ class DataArguments:
 @dataclass
 class ModelArguments:
     resume_checkpoint: Optional[str] = field(default=None, metadata={"help": "resume from this checkpoint."})
-    tasks: Optional[str] = field(default="MLM", metadata={"help": "pre-training tasks"})
+    model_type: Optional[str] = field(default="loglm", metadata={"help": "pre-training tasks"})
     hidden_size: Optional[int] = field(
         default=768,
         metadata={"help": "Dimensionality of the encoder layers and the pooler layer"},

@@ -10,7 +10,7 @@ import json
 from typing import List
 
 import torch
-from transformers import Seq2SeqTrainingArguments, HfArgumentParser, set_seed
+from transformers import Seq2SeqTrainingArguments, HfArgumentParser, set_seed, BartConfig, BartForConditionalGeneration
 
 from main import DataArguments, ModelArguments
 from model_x import LogLMTokenizer, LogLMConfig, LogLMForConditionalGeneration
@@ -21,6 +21,9 @@ from utils import get_logger
 def main(_args: List[str] = None):
     parser = HfArgumentParser((Seq2SeqTrainingArguments, DataArguments, ModelArguments))
     trainingArgs, data_args, model_args = parser.parse_args_into_dataclasses(_args)
+    trainingArgs: Seq2SeqTrainingArguments
+    data_args: DataArguments
+    model_args: ModelArguments
 
     # ******************* Logger ******************* #
     log_path = data_args.logPath
@@ -49,23 +52,43 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer(data_args.vocabPath, log_base=data_args.log_base)
+    tokenizer = LogLMTokenizer(data_args.vocabPath, log_base=data_args.log_base,
+                               anchored_length=data_args.anchored_length)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
-    model_args: ModelArguments
-    config = LogLMConfig(
-        vocab_size=len(tokenizer),
-        encoder_layers=model_args.num_hidden_layers,
-        encoder_ffn_dim=model_args.hidden_size * 4,
-        encoder_attention_heads=16,
-        decoder_layers=model_args.num_casual_decoder_layers,
-        decoder_ffn_dim=model_args.hidden_size * 4,
-        decoder_attention_heads=16,
-        d_model=model_args.hidden_size,
-    )
-    model = LogLMForConditionalGeneration(config)
+    if model_args.model_type.lower() == "loglm":
+        config = LogLMConfig(
+            vocab_size=len(tokenizer),
+            encoder_layers=model_args.num_hidden_layers,
+            encoder_ffn_dim=model_args.hidden_size * 4,
+            encoder_attention_heads=16,
+            decoder_layers=model_args.num_casual_decoder_layers,
+            decoder_ffn_dim=model_args.hidden_size * 4,
+            decoder_attention_heads=16,
+            d_model=model_args.hidden_size,
+        )
+        model = LogLMForConditionalGeneration(config)
+
+    elif model_args.model_type.lower() == "bart":
+        config = BartConfig(
+            vocab_size=len(tokenizer),
+            encoder_layers=model_args.num_hidden_layers,
+            encoder_ffn_dim=model_args.hidden_size * 4,
+            encoder_attention_heads=16,
+            decoder_layers=model_args.num_casual_decoder_layers,
+            decoder_ffn_dim=model_args.hidden_size * 4,
+            decoder_attention_heads=16,
+            d_model=model_args.hidden_size,
+            decoder_start_token_id=tokenizer.sep_token_id
+        )
+        model = BartForConditionalGeneration(config)
+        tokenizer.set_log_base_or_anchored_length(anchored_length=1)
+
+    else:
+        raise ValueError(f"Unrecognized model_type: {model_args.model_type}")
+
     # print(model)
-    logger.info(f"[Model] {sum(map(torch.numel, model.parameters())):.2e} params")
+    logger.info(f"[Model={model_args.model_type}] {sum(map(torch.numel, model.parameters())):.2e} params")
 
     # ============ Datasets ============ #
     for train_data_file in data_args.train_data_files:
@@ -78,6 +101,7 @@ def main(_args: List[str] = None):
         tokenizer=tokenizer,
         train_data_files=data_args.train_data_files,
         eval_data_file=data_args.eval_data_file,
+        use_cls_ids=model_args.model_type.lower() == "loglm",
         logger=logger,
     )
 

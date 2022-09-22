@@ -3,7 +3,7 @@
 set -e
 
 export MASTER_HOST=localhost
-export MASTER_PORT=`python tools/find_unused_port.py`
+export MASTER_PORT=$(python tools/find_unused_port.py)
 export SLURM_NNODES=1
 export SLURM_NODEID=0
 export nproc_per_node=1
@@ -17,6 +17,7 @@ export SEED=42
 export LOG_BASE=2
 
 export MODEL_SIZE=base
+export MODEL_TYPE=bart
 export HIDDEN_SIZE=256
 export NUM_HIDDEN_LAYERS=3
 export NUM_ATTENTION_HEADS=8

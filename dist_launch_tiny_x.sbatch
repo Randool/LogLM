@@ -9,12 +9,12 @@
 #SBATCH --output=./dist_launch_tiny-%A-%a.log
 #SBATCH --error=./dist_launch_tiny-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]
-#SBATCH --array=0
+#SBATCH --array=1
 
 set -e
 
 export MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-export MASTER_PORT=`srun --nodes=1 --ntasks=1 --nodelist=${MASTER_HOST} python tools/find_unused_port.py`
+export MASTER_PORT=$(srun --nodes=1 --ntasks=1 --nodelist="${MASTER_HOST}" python tools/find_unused_port.py)
 
 export nproc_per_node=2
 export PER_DEVICE_TRAIN_BATCH_SIZE=64
@@ -26,6 +26,18 @@ export SEED=42
 export MAX_STEPS=1000000
 
 export LOG_BASE=2
+
+case ${SLURM_ARRAY_TASK_ID} in
+0)
+  export MODEL_TYPE=loglm
+  ;;
+1)
+  export MODEL_TYPE=bart
+  ;;
+*)
+  exit 1
+  ;;
+esac
 
 export MODEL_SIZE=tiny
 export HIDDEN_SIZE=256

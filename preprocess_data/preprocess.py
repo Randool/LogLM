@@ -332,7 +332,50 @@ class MLMPreprocessor(Preprocessor):
                 current_length = 0
 
 
-class ARPreprocessor(Preprocessor):
+class BartLikePreprocessor(Preprocessor):
+    def __init__(self, config_: Config, log_path: str = None):
+        super().__init__(config_, log_path)
+
+    def _create_sample(self, tokens: List[str]):
+        sep_token_id = [self.tokenizer.sep_token_id]
+        input_ids: List[int] = self.tokenizer.convert_tokens_to_ids(tokens)
+        labels = input_ids + sep_token_id
+
+        if self.config.useWWM:
+            aligned_tokens = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens)]
+            masked_pos = self._masked_pos(aligned_tokens, 0)
+        else:
+            masked_pos = self._masked_pos(input_ids, 0)
+
+        return labels, masked_pos
+
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int]):
+        line = self.int_array_to_str(labels) + "|" + self.int_array_to_str(masked_pos)
+        self.writer.write(line + "\n")
+
+    def _create_and_save_instances_from_document(self, document: List[List[str]]):
+        """
+        :param document: List of tokenized sentence
+        """
+        current_chunk = []
+        current_length = 0
+
+        for i, sent in enumerate(document):
+            current_chunk.append(sent)
+            current_length += len(sent)
+
+            if (i == len(document) - 1 or current_length + 2 >= self.config.maxSeqLen) and current_chunk:
+                tokens = [token for chunk in current_chunk for token in chunk]
+                self.truncate_sent(tokens, self.config.maxSeqLen)
+
+                labels, masked_pos = self._create_sample(tokens)
+                self._save_sample_to_output_file(labels, masked_pos)
+
+                current_chunk = [] if current_chunk else current_chunk
+                current_length = 0
+
+
+class T5LikePreprocessor(Preprocessor):
     def __init__(self, config_: Config, log_path: str = None):
         super().__init__(config_, log_path)
 
@@ -433,8 +476,10 @@ if __name__ == "__main__":
 
     if args.type.lower() == "mlm":
         Processor = MLMPreprocessor
+    elif args.type.lower() == "bart":
+        Processor = BartLikePreprocessor
     else:
-        Processor = ARPreprocessor
+        Processor = T5LikePreprocessor
 
 
     def wrapper(config_: Config, logpath_: str, input_file_: str, output_file_: str, epoch_: int):

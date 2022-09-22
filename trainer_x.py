@@ -51,10 +51,12 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             tokenizer: LogLMTokenizer,
             train_data_files: List[str],
             eval_data_file: str,
+            use_cls_ids: bool,
             indexes_suffix: str = ".index",
             logger: logging.Logger = None,
     ):
         self.train_data_files = train_data_files
+        self.use_cls_ids = use_cls_ids
         self.indexes_suffix = indexes_suffix
         self.epoch_idx = 0
         self.log_base = tokenizer.log_base
@@ -64,14 +66,16 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             mask_token_id=tokenizer.mask_token_id,
             pad_token_id=tokenizer.pad_token_id,
             log_base=self.log_base,
-            nar_mode=False
+            nar_mode=False,
+            return_cls_ids=self.use_cls_ids,
         )
         self.eval_dataset = DatasetWithIndex(
             data_file=eval_data_file,
             mask_token_id=tokenizer.mask_token_id,
             pad_token_id=tokenizer.pad_token_id,
             log_base=self.log_base,
-            nar_mode=False
+            nar_mode=False,
+            return_cls_ids=self.use_cls_ids,
         )
 
         self.logger = logger if logger else logging.getLogger(__name__)
@@ -94,7 +98,8 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             mask_token_id=self.tokenizer.mask_token_id,
             pad_token_id=self.tokenizer.pad_token_id,
             log_base=self.log_base,
-            nar_mode=False
+            nar_mode=False,
+            return_cls_ids=self.use_cls_ids,
         )
 
         return self.get_train_dataloader()

@@ -26,7 +26,7 @@ for slot in MASTER_HOST MASTER_PORT nproc_per_node PER_DEVICE_TRAIN_BATCH_SIZE P
   fi
 done
 
-for slot in MODEL_SIZE HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS INTERMEDIATE_SIZE NON_CASUAL_LAYERS CASUAL_LAYERS SHARED_NON_CASUAL_DECODER; do
+for slot in MODEL_TYPE MODEL_SIZE HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS INTERMEDIATE_SIZE NON_CASUAL_LAYERS CASUAL_LAYERS SHARED_NON_CASUAL_DECODER; do
   if [ -z "${slot}" ]; then
     echo "Require ${slot}"
     legal=false
@@ -34,7 +34,7 @@ for slot in MODEL_SIZE HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS INTERME
 done
 
 if [[ ${legal} == false ]]; then
-  exit -1
+  exit 255
 fi
 
 echo "<node_rank=${SLURM_NODEID}, nnodes=${SLURM_NNODES}> | MASTER_HOST=${MASTER_HOST}, \
@@ -80,7 +80,7 @@ if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
 fi
 
 # ==== train path ==== #
-OUTPUT_DIR=${CORPUS_PATH}/ckpts/${MODEL_SIZE}
+OUTPUT_DIR=${CORPUS_PATH}/ckpts/${MODEL_TYPE}_${MODEL_SIZE}
 
 # +非自回归层数
 if ${SHARED_NON_CASUAL_DECODER}; then
@@ -121,6 +121,7 @@ main_x.py \
     --logPath                       ${LOG_PATH} \
     --log_base                      ${LOG_BASE} \
     --resume_checkpoint             ${RESUME_CHECKPOINT_PATH} \
+    --model_type                    ${MODEL_TYPE} \
     --hidden_size                   ${HIDDEN_SIZE} \
     --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \
     --num_attention_heads           ${NUM_ATTENTION_HEADS} \
