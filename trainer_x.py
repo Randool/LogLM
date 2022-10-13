@@ -14,6 +14,7 @@ import time
 import warnings
 from typing import List, Optional, Union, Dict, Any
 
+import datasets
 import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
@@ -22,7 +23,7 @@ from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments, set_seed, Tra
     is_torch_tpu_available, \
     __version__
 from transformers.deepspeed import deepspeed_init, deepspeed_reinit
-from transformers.file_utils import is_sagemaker_mp_enabled
+from transformers.file_utils import is_sagemaker_mp_enabled, is_datasets_available
 from transformers.integrations import hp_params
 from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_utils import get_last_checkpoint, TrainOutput, has_length, ShardedDDPOption, HPSearchBackend, \
@@ -52,6 +53,7 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             train_data_files: List[str],
             eval_data_file: str,
             use_cls_ids: bool,
+            t5_mode: bool,
             indexes_suffix: str = ".index",
             logger: logging.Logger = None,
     ):
@@ -60,21 +62,22 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
         self.indexes_suffix = indexes_suffix
         self.epoch_idx = 0
         self.log_base = tokenizer.log_base
+        self.t5_mode = t5_mode
 
         self.train_dataset = DatasetWithIndex(
             data_file=train_data_files[self.epoch_idx],
-            mask_token_id=tokenizer.mask_token_id,
-            pad_token_id=tokenizer.pad_token_id,
+            tokenizer=tokenizer,
             log_base=self.log_base,
             nar_mode=False,
+            t5_mode=t5_mode,
             return_cls_ids=self.use_cls_ids,
         )
         self.eval_dataset = DatasetWithIndex(
             data_file=eval_data_file,
-            mask_token_id=tokenizer.mask_token_id,
-            pad_token_id=tokenizer.pad_token_id,
+            tokenizer=tokenizer,
             log_base=self.log_base,
             nar_mode=False,
+            t5_mode=t5_mode,
             return_cls_ids=self.use_cls_ids,
         )
 
@@ -90,15 +93,72 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             callbacks=[LoggerCallback(self.logger)],
         )
 
+    def get_train_dataloader(self) -> DataLoader:
+        """
+        Returns the training [`~torch.utils.data.DataLoader`].
+
+        Will use no sampler if `self.train_dataset` does not implement `__len__`, a random sampler (adapted to
+        distributed training if necessary) otherwise.
+
+        Subclass and override this method if you want to inject some custom behavior.
+        """
+        if self.train_dataset is None:
+            raise ValueError("Trainer: training requires a train_dataset.")
+
+        train_dataset = self.train_dataset
+        if is_datasets_available() and isinstance(train_dataset, datasets.Dataset):
+            train_dataset = self._remove_unused_columns(train_dataset, description="training")
+
+        per_device_train_batch_size = self.args.per_device_train_batch_size
+        train_batch_size = self.args.train_batch_size
+
+        # Shrink batch_size on last dataset
+        setattr(self, "_gradient_accumulation_steps", self.args.gradient_accumulation_steps)
+
+        if self.epoch_idx + 1 == len(self.train_data_files):
+            per_device_train_batch_size = max(1, per_device_train_batch_size // 8)
+            train_batch_size = per_device_train_batch_size * max(1, self.args.n_gpu)
+            self.args.gradient_accumulation_steps = getattr(self, "_gradient_accumulation_steps") * 8
+        else:
+            self.args.gradient_accumulation_steps = getattr(self, "_gradient_accumulation_steps")
+
+        if isinstance(train_dataset, torch.utils.data.IterableDataset):
+            if self.args.world_size > 1:
+                train_dataset = IterableDatasetShard(
+                    train_dataset,
+                    batch_size=train_batch_size,
+                    drop_last=self.args.dataloader_drop_last,
+                    num_processes=self.args.world_size,
+                    process_index=self.args.process_index,
+                )
+
+            return DataLoader(
+                train_dataset,
+                batch_size=per_device_train_batch_size,
+                collate_fn=self.data_collator,
+                num_workers=self.args.dataloader_num_workers,
+                pin_memory=self.args.dataloader_pin_memory,
+            )
+
+        return DataLoader(
+            train_dataset,
+            batch_size=self.args.train_batch_size,
+            sampler=self._get_train_sampler(),
+            collate_fn=self.data_collator,
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+        )
+
     def get_next_train_dataloader(self):
         self.epoch_idx = (self.epoch_idx + 1) % len(self.train_data_files)
 
         self.train_dataset = DatasetWithIndex(
             data_file=self.train_data_files[self.epoch_idx],
-            mask_token_id=self.tokenizer.mask_token_id,
-            pad_token_id=self.tokenizer.pad_token_id,
+            tokenizer=self.tokenizer,
             log_base=self.log_base,
             nar_mode=False,
+            t5_mode=self.t5_mode,
             return_cls_ids=self.use_cls_ids,
         )
 

@@ -11,31 +11,38 @@ import multiprocessing
 import os
 import random
 import traceback
-from math import log2, ceil
 from multiprocessing import Pool
 from os.path import join
 from typing import List, Tuple, TextIO, Union, Iterable
 
 import thulac
 
-from model import LogLMTokenizer
+from model_x import LogLMTokenizer
 from utils.logger import get_logger
 
 
 class Config:
     def __init__(self, vocabPath: str, **kwargs) -> None:
         """Define several setting parameters."""
-        self.maskRatio = kwargs.pop("maskRatio", 0.15)
-        self.maskProb = kwargs.pop("maskProb", 0.8)
-        self.useWWM = kwargs.pop("useWWM", False)
-        self.useSynonym = kwargs.pop("useSynonym", False)
-        self.maxSeqLen = kwargs.pop("maxSeqLen", 512)
-        self.shortSeqProb = kwargs.pop("shortSeqProb", 0.1)
-        self.maxPredPerSeq = kwargs.pop("maxPredPerSeq", 20)
-        self.extraSegWordsFile: str = kwargs.pop("extraSegWordsFile", None)
-        self.verboseStep: int = kwargs.pop("verboseStep", None)
-        self.NAR: bool = kwargs.pop("NAR", True)
         self.vocabPath = vocabPath
+
+        self.maskRatio = kwargs.get("maskRatio", 0.15)
+        self.maskProb = kwargs.get("maskProb", 0.8)
+
+        self.max_extension_len = kwargs.get("max_extension_len", 8)
+
+        self.useWWM = kwargs.get("useWWM", False)
+        self.useSynonym = kwargs.get("useSynonym", False)
+
+        self.maxSeqLen = kwargs.get("maxSeqLen", 512)
+        self.maxPredPerSeq = kwargs.get("maxPredPerSeq", 76)
+
+        self.maxSeqLen2 = kwargs.get("maxSeqLen2", 4096)
+        self.maxPredPerSeq2 = kwargs.get("maxPredPerSeq2", 256)
+
+        self.extraSegWordsFile: str = kwargs.get("extraSegWordsFile", None)
+        self.verboseStep: int = kwargs.get("verboseStep", None)
+        self.NAR: bool = kwargs.get("NAR", True)
 
 
 class Preprocessor:
@@ -108,10 +115,6 @@ class Preprocessor:
                 tokens.pop()
 
     @staticmethod
-    def cls_length(length: int) -> int:
-        return ceil(log2(max(1, length)))
-
-    @staticmethod
     def convert_tokens_to_string(tokens: List[str]) -> str:
         """ ['化', '学', '药', '品', '：', 'aaa', '##a', 'bb', '##b']
         => '化学药品：aaaa bbb' """
@@ -162,8 +165,9 @@ class Preprocessor:
 
         return segments
 
-    def _masked_pos(self, token_ids: Union[List[int], List[List[int]]], bias: int) -> List[int]:
-        """ 只需保存被mask的token的位置即可。另外，使用“水库抽样”算法限制最大预测个数 """
+    def masked_pos(self, token_ids: Union[List[int], List[List[int]]], bias: int) -> List[str]:
+        """ Just save the locations of the masked token. The "reservoir sampling"
+            algorithm is used to limit the maximum number of predictions """
         mask_ratio = self.config.maskRatio
         max_pred_len = self.config.maxPredPerSeq
         pos = []
@@ -193,7 +197,23 @@ class Preprocessor:
                 bias += len(ids)
             pos = [idx for chunk in chunk_pos for idx in chunk]
 
-        return sorted(pos)
+        # Merge spans
+        pos = sorted(pos)
+        spans = []
+        i = 0
+
+        while i < len(pos):
+            j = i + 1
+            while j < len(pos) and pos[j - 1] + 1 == pos[j]:
+                j += 1
+
+            if i + 1 == j:
+                spans.append(str(pos[i]))
+            else:
+                spans.append(f"{pos[i]}-{pos[j - 1]}")
+            i = j
+
+        return spans
 
     def _create_sample(self, *args, **kwargs):
         raise NotImplementedError
@@ -256,8 +276,6 @@ class MLMPreprocessor(Preprocessor):
         super().__init__(config_, log_path)
 
     def _create_sample(self, tokens_a: List[str], tokens_b: List[str]):
-        # cls_len = self.cls_length(len(tokens_a) + len(tokens_b))
-        # token_type_lengths = (cls_len + len(tokens_a) + 1, len(tokens_b) + 1)
         token_type_lengths = (len(tokens_a) + 1, len(tokens_b) + 1)
 
         # cls_token_ids = self.tokenizer.cls_token_ids[:cls_len]
@@ -270,21 +288,21 @@ class MLMPreprocessor(Preprocessor):
         if self.config.useWWM:
             aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
             aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
-            masked_pos = self._masked_pos(aligned_tokens_a, 0) + \
-                         self._masked_pos(aligned_tokens_b, 0 + len(input_ids_a) + 1)
+            masked_pos = self.masked_pos(aligned_tokens_a, 0) + \
+                self.masked_pos(aligned_tokens_b, 0 + len(input_ids_a) + 1)
         else:
-            masked_pos = self._masked_pos(input_ids_a, 0) + \
-                         self._masked_pos(input_ids_b, 0 + len(input_ids_a) + 1)
+            masked_pos = self.masked_pos(input_ids_a, 0) + \
+                self.masked_pos(input_ids_b, 0 + len(input_ids_a) + 1)
 
         return labels, masked_pos, token_type_lengths
 
-    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int],
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[str],
                                     token_type_lengths: Tuple[int, int], SO_label: int) -> None:
         """ Format: `labels|masked_pos|token_type_lengths|SO_label` """
         line = self.int_array_to_str(labels) + "|" + \
-               self.int_array_to_str(masked_pos) + "|" + \
-               self.int_array_to_str(token_type_lengths) + "|" + \
-               str(SO_label) + "\n"
+            " ".join(masked_pos) + "|" + \
+            self.int_array_to_str(token_type_lengths) + "|" + \
+            str(SO_label) + "\n"
 
         self.writer.write(line)
 
@@ -299,7 +317,6 @@ class MLMPreprocessor(Preprocessor):
         for i, sent in enumerate(document):
             current_chunk.append(sent)
             current_length += len(sent)
-            # cls_len = self.cls_length(current_length)
 
             if i == len(document) - 1 or current_length + 2 >= self.config.maxSeqLen:
                 if current_chunk:
@@ -337,20 +354,18 @@ class BartLikePreprocessor(Preprocessor):
         super().__init__(config_, log_path)
 
     def _create_sample(self, tokens: List[str]):
-        sep_token_id = [self.tokenizer.sep_token_id]
         input_ids: List[int] = self.tokenizer.convert_tokens_to_ids(tokens)
-        labels = input_ids + sep_token_id
 
         if self.config.useWWM:
             aligned_tokens = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens)]
-            masked_pos = self._masked_pos(aligned_tokens, 0)
+            masked_pos = self.masked_pos(aligned_tokens, 0)
         else:
-            masked_pos = self._masked_pos(input_ids, 0)
+            masked_pos = self.masked_pos(input_ids, 0)
 
-        return labels, masked_pos
+        return input_ids, masked_pos
 
-    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int]):
-        line = self.int_array_to_str(labels) + "|" + self.int_array_to_str(masked_pos)
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[str]):
+        line = self.int_array_to_str(labels) + "|" + " ".join(masked_pos)
         self.writer.write(line + "\n")
 
     def _create_and_save_instances_from_document(self, document: List[List[str]]):
@@ -379,22 +394,92 @@ class T5LikePreprocessor(Preprocessor):
     def __init__(self, config_: Config, log_path: str = None):
         super().__init__(config_, log_path)
 
+    def masked_pos(self, token_ids: Union[List[int], List[List[int]]], bias: int) -> List[str]:
+        """ Mask some spans in `token_ids` and return the masked spans ([start, end]) """
+        mask_ratio = self.config.maskRatio  # TODO: adjust this
+        max_pred_len = self.config.maxPredPerSeq
+
+        # Select masked spans
+        idxes = [i for i in range(len(token_ids))]
+        random.shuffle(idxes)
+        slices = sorted([
+            [start, min(len(token_ids), start + random.randint(1, self.config.max_extension_len))]  # [start, end)
+            for start in idxes[:int(mask_ratio * len(idxes))]
+        ])
+
+        # Merge overlapping spans
+        merged_slices = []
+        for _slice in slices:
+            if len(merged_slices) == 0 or merged_slices[-1][1] < _slice[0]:
+                merged_slices.append(_slice)
+            else:
+                merged_slices[-1][1] = _slice[1]
+
+        slices = merged_slices
+        random.shuffle(slices)  # Shuffle slices to prevent only the tailing slices from being lost
+
+        # Convert `span` => `idx span`
+        idx_spans = []
+        pred_len = 0
+
+        if self.config.useWWM:
+            token_ids: List[List[int]]
+
+            accumulate_bias = [bias]
+            for i in range(len(token_ids) - 1):
+                accumulate_bias.append(accumulate_bias[-1] + len(token_ids[i]))
+
+            for _slice in slices:  # [start, end)
+                span_length = sum(len(token_ids[j]) for j in range(*_slice))
+
+                if pred_len + span_length >= max_pred_len:
+                    span_length = max_pred_len - pred_len
+
+                _bias = accumulate_bias[_slice[0]]
+                if span_length == 1:
+                    idx_spans.append(f"{_bias}")
+                else:
+                    idx_spans.append(f"{_bias}-{_bias + span_length - 1}")  # [left, right]
+
+                pred_len += span_length
+                if pred_len >= max_pred_len:
+                    break
+
+        else:
+            for _slice in slices:
+                span_length = _slice[1] - _slice[0]
+
+                if pred_len + span_length >= max_pred_len:
+                    span_length -= max_pred_len - pred_len
+
+                if span_length == 1:
+                    idx_spans.append(f"{bias + _slice[0]}")
+                else:
+                    idx_spans.append(f"{bias + _slice[0]}-{bias + span_length - 1}")  # [left, right]
+
+                pred_len += span_length
+                if pred_len >= max_pred_len:
+                    break
+
+        idx_spans = sorted(idx_spans, key=lambda x: int(x.split("-")[0] if "-" in x else x))
+
+        return idx_spans
+
     def _create_sample(self, tokens: List[str]):
-        sep_token_id = [self.tokenizer.sep_token_id]
         input_ids: List[int] = self.tokenizer.convert_tokens_to_ids(tokens)
-        labels = input_ids + sep_token_id
 
         if self.config.useWWM:
             aligned_tokens = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens)]
-            masked_pos = self._masked_pos(aligned_tokens, 0)
+            masked_pos = self.masked_pos(aligned_tokens, 0)
         else:
-            masked_pos = self._masked_pos(input_ids, 0)
+            masked_pos = self.masked_pos(input_ids, 0)
 
-        return labels, masked_pos
+        return input_ids, masked_pos
 
-    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[int]):
-        line = self.int_array_to_str(labels) + "|" + self.int_array_to_str(masked_pos)
-        self.writer.write(line + "\n")
+    def _save_sample_to_output_file(self, labels: List[int], masked_pos: List[str]):
+        if len(masked_pos) > 0:
+            line = self.int_array_to_str(labels) + "|" + " ".join(masked_pos)
+            self.writer.write(line + "\n")
 
     def _create_and_save_instances_from_document(self, document: List[List[str]]):
         """
@@ -426,13 +511,17 @@ def parse_args(args: List[str] = None):
     parser.add_argument("--maskRatio", type=float, default=0.15, help="the mask ratio of each sequence")
     parser.add_argument("--maskProb", type=float, default=0.8,
                         help="the probability of replacing a token into [MASK] or its synonym")
+    parser.add_argument("--max_extension_len", type=int, default=8, help="Maximum masked items length")
     parser.add_argument("--WWM", action="store_true", help="whether to use the Whole Word Mask mechanism")
     parser.add_argument("--synonym", action="store_true", help="whether to use synonym or [MASK]")
+
     parser.add_argument("--maxSeqLen", type=int, default=512, help="maximum sequence length")
+    parser.add_argument("--maxPredPerSeq", type=int, default=20, help="the maximum tokens number to mask")
+    parser.add_argument("--maxSeqLen2", type=int, default=512, help="maximum sequence length")
+    parser.add_argument("--maxPredPerSeq2", type=int, default=20, help="the maximum tokens number to mask")
+
     parser.add_argument("--input_path", "-i", type=str, required=True, help="input path to preprocess")
     parser.add_argument("--output_path", "-o", type=str, required=True, help="output path to save")
-    parser.add_argument("--shortSeqProb", type=float, default=0.1, help="the probability of using short sequence")
-    parser.add_argument("--maxPredPerSeq", type=int, default=20, help="the maximum tokens number to mask")
     parser.add_argument("--extraSegWordsFile", type=str, default=None,
                         help="Additional dict file for the Chinese tokenizer")
     parser.add_argument("--verboseStep", type=int, default=None,
@@ -461,17 +550,18 @@ if __name__ == "__main__":
     logger.info(f"saving to: {args.output_path}")
 
     config = Config(
+        vocabPath=args.vocabPath,
         maskRatio=args.maskRatio,
+        max_extension_len=args.max_extension_len,
         useWWM=args.WWM,
         useSynonym=args.synonym,
         maxSeqLen=args.maxSeqLen,
-        shortSeqProb=args.shortSeqProb,
         maxPredPerSeq=args.maxPredPerSeq,
+        maxSeqLen2=args.maxSeqLen2,
+        maxPredPerSeq2=args.maxPredPerSeq2,
         extraSegWordsFile=args.extraSegWordsFile,
         verboseStep=args.verboseStep,
-        vocabPath=args.vocabPath,
         NAR=args.NAR,
-        processNum=args.processNum,
     )
 
     if args.type.lower() == "mlm":
@@ -480,7 +570,6 @@ if __name__ == "__main__":
         Processor = BartLikePreprocessor
     else:
         Processor = T5LikePreprocessor
-
 
     def wrapper(config_: Config, logpath_: str, input_file_: str, output_file_: str, epoch_: int):
         try:
@@ -491,7 +580,6 @@ if __name__ == "__main__":
         except Exception as e:
             print(e)
             traceback.print_exc()
-
 
     # get all input_files; each process deals with one input file.
     input_files = []
@@ -522,7 +610,8 @@ if __name__ == "__main__":
         for epoch in range(args.dupEpochNum):
             curr_config = copy.deepcopy(config)  # Configure isolation
             if epoch == args.dupEpochNum - 1:
-                curr_config.maxSeqLen = 512
+                curr_config.maxSeqLen = curr_config.maxSeqLen2
+                curr_config.maxPredPerSeq = curr_config.maxPredPerSeq2
 
             for index, input_file in enumerate(input_files):
                 output_file = join(args.output_path, f"epoch-{epoch}", os.path.basename(input_file))

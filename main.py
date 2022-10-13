@@ -47,6 +47,8 @@ class DataArguments:
 class ModelArguments:
     resume_checkpoint: Optional[str] = field(default=None, metadata={"help": "resume from this checkpoint."})
     model_type: Optional[str] = field(default="loglm", metadata={"help": "pre-training tasks"})
+    t5_mode: Optional[bool] = field(default=False, metadata={"help": "Train model in T5 fashion"})
+    log_cross_attn: Optional[bool] = field(default=True, metadata={"help": "O(nlogm) time complexity"})
     hidden_size: Optional[int] = field(
         default=768,
         metadata={"help": "Dimensionality of the encoder layers and the pooler layer"},

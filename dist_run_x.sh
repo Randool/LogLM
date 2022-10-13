@@ -47,8 +47,8 @@ set -e
 if [ -z "${CORPUS_PATH}" ]; then
   CORPUS_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 fi
-TRAIN_DATA_PATH="${CORPUS_PATH}/processed/train"
-EVAL_DATA_PATH="${CORPUS_PATH}/processed/dev"
+TRAIN_DATA_PATH="${CORPUS_PATH}/processed/trainL"
+EVAL_DATA_PATH="${CORPUS_PATH}/processed/devL"
 
 if [ -z "${VOCAB_PATH}" ]; then
   VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
@@ -58,7 +58,7 @@ if [ -z "${LOG_BASE}" ]; then
   LOG_BASE=2
 fi
 
-# ==== training hyperparameters ==== #
+# ==== training hyper-parameters ==== #
 LEARNING_RATE=1e-4
 WEIGHT_DECAY=0.01
 if [ -z "${MAX_STEPS}" ]; then
@@ -94,6 +94,11 @@ if [ ${CASUAL_LAYERS} -gt 0 ]; then
   OUTPUT_DIR=${OUTPUT_DIR}_dec${CASUAL_LAYERS}
 fi
 
+# +log_cross_attn
+if [ ${log_cross_attn} -eq 0 ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_Xnn
+fi
+
 # +log底数
 OUTPUT_DIR=${OUTPUT_DIR}_log${LOG_BASE}
 
@@ -115,13 +120,20 @@ python -um torch.distributed.launch \
     --master_port     ${MASTER_PORT} \
 main_x.py \
     --seed                          ${SEED} \
+    --fp16                          true \
+    --ignore_data_skip              true \
+    \
     --trainDataPath                 ${TRAIN_DATA_PATH} \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \
     --logPath                       ${LOG_PATH} \
+    --train_file_pattern            'epoch-*.pretrain.data' \
     --log_base                      ${LOG_BASE} \
+    \
     --resume_checkpoint             ${RESUME_CHECKPOINT_PATH} \
     --model_type                    ${MODEL_TYPE} \
+    --t5_mode                       ${t5_mode} \
+    --log_cross_attn                ${log_cross_attn} \
     --hidden_size                   ${HIDDEN_SIZE} \
     --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \
     --num_attention_heads           ${NUM_ATTENTION_HEADS} \
@@ -151,9 +163,7 @@ main_x.py \
     --eval_steps                    ${EVAL_STEPS} \
     --dataloader_num_workers        ${DATALOADER_NUM_WORKERS} \
     --label_smoothing_factor        ${LABEL_SMOOTHING_FACTOR} \
-    --ddp_find_unused_parameters    false \
+    --ddp_find_unused_parameters    true \
     --load_best_model_at_end        true \
     --metric_for_best_model         loss \
-    --greater_is_better             false \
-    \
-    --train_file_pattern            'epoch-*.pretrain.data'
+    --greater_is_better             false

@@ -5,6 +5,7 @@ debug*
 .stignore
 .stfolder
 figs
+downstream
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

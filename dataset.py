@@ -13,13 +13,25 @@ from typing import List, Optional
 import torch
 from torch.utils.data import IterableDataset, Dataset
 
-from model.tokenizer import LogTruncation
+from model_x.tokenizer import LogTruncation, LogLMTokenizer
 
 Item = namedtuple("Items", ("input_ids", "token_type_ids", "cls_type_ids", "labels", "SO_label"))
 
 
 def str_to_int_array(string: str) -> List[int]:
     return list(map(int, string.split()))
+
+
+def expand_masked_spans(masked_pos: str) -> List[int]:
+    spans = masked_pos.split(" ")
+    pos = []
+    for span in spans:
+        if "-" in span:
+            start, end = span.split("-")
+            pos.extend([i for i in range(int(start), 1 + int(end))])
+        else:
+            pos.append(int(span))
+    return pos
 
 
 def trim_ids(ids: List[Optional[int]], target_len: int, has_bos: bool, has_eos: bool, direct: str = "any") -> List[int]:
@@ -55,7 +67,7 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     # Format: `labels|masked_pos|token_type_lengths|cls_length|SO_label` or `labels|masked_pos`
     labels_, masked_pos, token_type_lengths, SO_label = line.split("|")
     token_ids = str_to_int_array(labels_)
-    masked_pos = str_to_int_array(masked_pos)
+    masked_pos = expand_masked_spans(masked_pos)
     token_type_lengths = str_to_int_array(token_type_lengths)
     SO_label = int(SO_label)
 
@@ -92,11 +104,12 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     )
 
 
-def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_length: int = None) -> Item:
+def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, eos_token_id: int,
+                  max_length: int = None) -> Item:
     # Format: `labels|masked_pos`
     labels_, masked_pos = line.split("|")
     token_ids = str_to_int_array(labels_)
-    masked_pos = str_to_int_array(masked_pos)
+    masked_pos = expand_masked_spans(masked_pos)
 
     # Invert the position where mask is required
     for pos in masked_pos:
@@ -106,11 +119,57 @@ def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_
     assert cls_len <= 12, f"`cls_length` ({cls_len}) > 12 is not supported"
 
     cls_ids = [i for i in range(1, cls_len + 1)]
-    ids = trim_ids(token_ids, len_ids, False, True, direct="any")
+    ids = trim_ids(token_ids, len_ids, False, False, direct="any")
 
-    input_ids = cls_ids + [x if x > 0 else mask_token_id for x in ids]
-    labels = cls_ids[:1] + [abs(x) for x in ids]
-    cls_type_ids = [1] * cls_len + [0] * len_ids
+    input_ids = cls_ids + [x if x > 0 else mask_token_id for x in ids] + [eos_token_id]
+    labels = cls_ids[:1] + [abs(x) for x in ids] + [eos_token_id]
+    cls_type_ids = [1] * cls_len + [0] * (len_ids + 1)
+
+    return Item(
+        input_ids=input_ids,
+        token_type_ids=None,
+        cls_type_ids=cls_type_ids,
+        labels=labels,
+        SO_label=None
+    )
+
+
+def parse_example_t5(line: str, truncation: LogTruncation, t5_mask_token_ids: List[int], eos_token_id: int,
+                     max_length: int = None) -> Item:
+    labels_, masked_pos = line.split("|")
+    token_ids = str_to_int_array(labels_)
+    masked_pos = expand_masked_spans(masked_pos)
+    msk_idx = 0
+    span_cnt = 0
+
+    _input_ids = []
+
+    NORMAL, IN_MASK = 1, 2
+    STATE = NORMAL
+
+    for i, _id in enumerate(token_ids):
+        if msk_idx < len(masked_pos) and i == masked_pos[msk_idx]:
+            if STATE == NORMAL:
+                _input_ids.append([t5_mask_token_ids[span_cnt], _id])
+                span_cnt += 1
+                STATE = IN_MASK
+            else:
+                _input_ids[-1].append(_id)
+            msk_idx += 1
+        else:
+            if STATE == IN_MASK:
+                STATE = NORMAL
+            _input_ids.append(_id)
+
+    cls_len, len_ids, _len_pair_ids = truncation.truncated_length(len(_input_ids), max_length)
+    assert cls_len <= 12, f"`cls_length` ({cls_len}) > 12 is not supported"
+
+    cls_ids = list(range(1, cls_len + 1))
+    _input_ids = trim_ids(_input_ids, len_ids, False, False, direct="any")
+
+    input_ids = cls_ids + [x if isinstance(x, int) else x[0] for x in _input_ids] + [eos_token_id]
+    labels = cls_ids[:1] + [_x for x in _input_ids if isinstance(x, list) for _x in x] + [eos_token_id]
+    cls_type_ids = [1] * cls_len + [0] * (len(input_ids) - cls_len)
 
     return Item(
         input_ids=input_ids,
@@ -206,14 +265,24 @@ class DatasetForShuffledFile(IterableDataset):
 
 
 class DatasetWithIndex(Dataset):
-    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, log_base=2,
-                 nar_mode=False, return_cls_ids=True, index_suffix: str = ".index"):
+    def __init__(self, data_file: str, tokenizer: LogLMTokenizer, log_base=2, nar_mode=False, t5_mode=False,
+                 return_cls_ids=True, index_suffix: str = ".index"):
         self.data_file = data_file
         self.indexes = self.parse_index(data_file + index_suffix)
         self.nar_mode = nar_mode
+        self.t5_mode = t5_mode
+
+        self.pad_token_id = tokenizer.pad_token_id
+        self.mask_token_id = tokenizer.mask_token_id
+        self.eos_token_id = tokenizer.eos_token_id
+
+        self.t5_mask_token_ids = tokenizer.additional_special_tokens_ids
+
+        if t5_mode and self.t5_mask_token_ids is None:
+            raise ValueError("`t5_mask_token_ids` should be given under T5-mode")
 
         self._trunc = LogTruncation(log_base=log_base)
-        self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode, return_cls_ids)
+        self.collate_fn = CollateFn(self.mask_token_id, self.pad_token_id, nar_mode, return_cls_ids)
 
     @staticmethod
     def parse_index(index_file: str) -> List[int]:
@@ -229,4 +298,6 @@ class DatasetWithIndex(Dataset):
         with open(self.data_file, "rb") as f:
             f.seek(idx)
             line = f.readline().decode()
-        return parse_example(line, self._trunc, self.collate_fn.mask_token_id)
+        if self.t5_mode:
+            return parse_example_t5(line, self._trunc, self.t5_mask_token_ids, self.eos_token_id)
+        return parse_example(line, self._trunc, self.mask_token_id, self.eos_token_id)

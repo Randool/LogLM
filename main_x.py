@@ -52,11 +52,11 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer(data_args.vocabPath, log_base=data_args.log_base,
-                               anchored_length=data_args.anchored_length)
+    tokenizer = LogLMTokenizer.from_pretrained(data_args.vocabPath, log_base=data_args.log_base,
+                                               anchored_length=data_args.anchored_length)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
-    if model_args.model_type.lower() == "loglm":
+    if "loglm" in model_args.model_type.lower():
         config = LogLMConfig(
             vocab_size=len(tokenizer),
             encoder_layers=model_args.num_hidden_layers,
@@ -66,6 +66,8 @@ def main(_args: List[str] = None):
             decoder_ffn_dim=model_args.hidden_size * 4,
             decoder_attention_heads=16,
             d_model=model_args.hidden_size,
+            use_longformer=model_args.model_type.lower() == "longloglm",
+            log_cross_attn=model_args.log_cross_attn,
         )
         model = LogLMForConditionalGeneration(config)
 
@@ -101,7 +103,8 @@ def main(_args: List[str] = None):
         tokenizer=tokenizer,
         train_data_files=data_args.train_data_files,
         eval_data_file=data_args.eval_data_file,
-        use_cls_ids=model_args.model_type.lower() == "loglm",
+        use_cls_ids=("loglm" in model_args.model_type.lower()),
+        t5_mode=model_args.t5_mode,
         logger=logger,
     )
 

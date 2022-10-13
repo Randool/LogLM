@@ -109,8 +109,13 @@ class LogLMTokenizer(BertTokenizer):
             strip_accents=None,
             log_base=2,
             anchored_length: int = -1,
+            extra_ids=100,
+            additional_special_tokens=None,
             **kwargs
     ):
+        if extra_ids > 0 and additional_special_tokens is None:
+            additional_special_tokens = [f"<extra_id_{i}>" for i in range(extra_ids)]
+
         super().__init__(
             vocab_file=vocab_file,
             do_lower_case=do_lower_case,
@@ -123,6 +128,7 @@ class LogLMTokenizer(BertTokenizer):
             mask_token=mask_token,
             tokenize_chinese_chars=tokenize_chinese_chars,
             strip_accents=strip_accents,
+            additional_special_tokens=additional_special_tokens,
             **kwargs,
         )
         self.cls_tokens = [
