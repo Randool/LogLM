@@ -13,7 +13,7 @@ import torch
 from transformers import Seq2SeqTrainingArguments, HfArgumentParser, set_seed, BartConfig, BartForConditionalGeneration
 
 from main import DataArguments, ModelArguments
-from model_x import LogLMTokenizer, LogLMConfig, LogLMForConditionalGeneration
+from model import LogLMTokenizer, LogLMConfig, LogLMForConditionalGeneration
 from trainer_x import Seq2SeqTrainerPro
 from utils import get_logger
 

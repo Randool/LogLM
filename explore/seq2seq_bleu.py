@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from dataset import DatasetWithIndex
 from debug import dict_to_device
-from model_x import LogLMForConditionalGeneration, LogLMTokenizer
+from model import LogLMForConditionalGeneration, LogLMTokenizer
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 HOME = expanduser("~")

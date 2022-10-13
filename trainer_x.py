@@ -30,7 +30,7 @@ from transformers.trainer_utils import get_last_checkpoint, TrainOutput, has_len
     speed_metrics
 
 from dataset import DatasetWithIndex
-from model_x import LogLMTokenizer, LogLMForConditionalGeneration
+from model import LogLMTokenizer, LogLMForConditionalGeneration
 from utils import LoggerCallback
 
 # Name of the files used for checkpointing

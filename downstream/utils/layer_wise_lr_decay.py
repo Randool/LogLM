@@ -52,11 +52,10 @@ def config_layer_wise_lr(
         custom_layer_lr:    Manually configured learning rate for layers, id(layer) -> lr
     -------
     Examples::
-        >>> from transformers import BertLayer
+        >>> from transformers import BertModel, BertLayer
         >>> from transformers.models.bert.modeling_bert import BertEmbeddings
-        >>> from finetune.advanced_model import TokenClassifier, BertForNER
 
-        >>> ner_model: BertForNER = BertForNER.from_pretrained("xxx")
+        >>> ner_model: BertModel = BertModel.from_pretrained("xxx")
         >>> params = config_layer_wise_lr(ner_model,max_lr=5e-5,max_weight_decay=1e-6,decay_rate=0.9,stop_layers=(BertLayer, BertEmbeddings, TokenClassifier),custom_layer_lr={id(ner_model.classifier): 3e-5})
     """
     layers = _layer_wise_traverse(model, stop_layers)

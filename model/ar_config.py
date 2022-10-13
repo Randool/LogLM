@@ -19,7 +19,7 @@ class LogLMConfig(PretrainedConfig):
 
     def __init__(
             self,
-            vocab_size=30522,
+            vocab_size=20000,
             max_position_embeddings=1024,
             encoder_layers=12,
             encoder_ffn_dim=3072,
@@ -50,6 +50,17 @@ class LogLMConfig(PretrainedConfig):
             attention_window: Union[List[int], int] = 512,
             **kwargs
     ):
+        super().__init__(
+            num_labels=num_labels,
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            is_encoder_decoder=is_encoder_decoder,
+            decoder_start_token_id=decoder_start_token_id,
+            forced_eos_token_id=forced_eos_token_id,
+            **kwargs,
+        )
+
         self.vocab_size = vocab_size
         self.max_position_embeddings = max_position_embeddings
         self.d_model = d_model
@@ -76,17 +87,6 @@ class LogLMConfig(PretrainedConfig):
         self.log_cross_attn = log_cross_attn
         self.attention_window = attention_window
         self.sep_token_id = eos_token_id
-
-        super().__init__(
-            num_labels=num_labels,
-            pad_token_id=pad_token_id,
-            bos_token_id=bos_token_id,
-            eos_token_id=eos_token_id,
-            is_encoder_decoder=is_encoder_decoder,
-            decoder_start_token_id=decoder_start_token_id,
-            forced_eos_token_id=forced_eos_token_id,
-            **kwargs,
-        )
 
         # ensure backward compatibility for BART CNN models
         if self.forced_bos_token_id is None and kwargs.get("force_bos_token_to_be_generated", False):

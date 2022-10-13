@@ -92,7 +92,7 @@ class LogTruncation:
 
 
 class LogLMTokenizer(BertTokenizer):
-    model_input_names: List[str] = ["input_ids", "token_type_ids", "attention_mask", "cls_type_ids"]
+    model_input_names: List[str] = ["input_ids", "attention_mask", "cls_type_ids"]
 
     def __init__(
             self,
@@ -109,8 +109,14 @@ class LogLMTokenizer(BertTokenizer):
             strip_accents=None,
             log_base=2,
             anchored_length: int = -1,
+            return_token_type=False,
+            extra_ids=100,
+            additional_special_tokens=None,
             **kwargs
     ):
+        if extra_ids > 0 and additional_special_tokens is None:
+            additional_special_tokens = [f"<extra_id_{i}>" for i in range(extra_ids)]
+
         super().__init__(
             vocab_file=vocab_file,
             do_lower_case=do_lower_case,
@@ -123,15 +129,15 @@ class LogLMTokenizer(BertTokenizer):
             mask_token=mask_token,
             tokenize_chinese_chars=tokenize_chinese_chars,
             strip_accents=strip_accents,
+            additional_special_tokens=additional_special_tokens,
             **kwargs,
         )
-        self.cls_tokens = [
-            '[CLS]', '[CLS1]', '[CLS2]', '[CLS3]', '[CLS4]', '[CLS5]',
-            '[CLS6]', '[CLS7]', '[CLS8]', '[CLS9]', '[CLS10]', '[CLS11]'
-        ]
+
         self.bos_token = self.cls_token
         self.eos_token = self.sep_token
-        self.cls_token_ids = [self._convert_token_to_id(t) for t in self.cls_tokens]
+
+        if return_token_type:
+            self.model_input_names.append("token_type_ids")
 
         self.log_truncation = LogTruncation(log_base, anchored_length)
 
@@ -264,10 +270,10 @@ class LogLMTokenizer(BertTokenizer):
         # Add special tokens
         if add_special_tokens:
             sequence = self.build_inputs_with_special_tokens(ids, pair_ids)
-            token_type_ids = self.create_token_type_ids_from_sequences(ids, pair_ids)
+            token_type_ids = self.create_token_type_ids_from_sequences(ids, pair_ids) if return_token_type_ids else None
         else:
             sequence = ids + pair_ids if pair else ids
-            token_type_ids = [0] * len(ids) + ([1] * len(pair_ids) if pair else [])
+            token_type_ids = [0] * len(ids) + ([1] * len(pair_ids) if pair else []) if return_token_type_ids else None
 
         # Build output dictionary
         encoded_inputs["input_ids"] = sequence
@@ -308,9 +314,9 @@ class LogLMTokenizer(BertTokenizer):
         sep = [self.sep_token_id]
 
         if token_ids_1 is None:
-            return self.cls_token_ids[:cls_len] + token_ids_0 + sep
+            return [self.cls_token_id] * cls_len + token_ids_0 + sep
         else:
-            return self.cls_token_ids[:cls_len] + token_ids_0 + sep + token_ids_1 + sep
+            return [self.cls_token_id] * cls_len + token_ids_0 + sep + token_ids_1 + sep
 
     def get_special_tokens_mask(
             self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None,
@@ -319,8 +325,9 @@ class LogLMTokenizer(BertTokenizer):
         if already_has_special_tokens:
             sp_ids = getattr(self, "special_tokens_ids", None)
             if sp_ids is None:
-                _sp_ids = [self._convert_token_to_id(t) for t in self.special_tokens_map.values()]
-                sp_ids = set(_sp_ids + self.cls_token_ids)
+                sp_ids = set(
+                    [self._convert_token_to_id(t) for t in self.special_tokens_map.values()] + [self.cls_token_id]
+                )
                 setattr(self, "special_tokens_ids", sp_ids)
             return [1 if _id in sp_ids else 0 for _id in chain(token_ids_0, [] if token_ids_1 is None else token_ids_1)]
 
@@ -363,6 +370,7 @@ class LogLMTokenizer(BertTokenizer):
             config = json.load(f)
             config["log_base"] = self.log_base
             config["anchored_length"] = self.anchored_length
+            config["return_token_type"] = self.return_token_type
             f.seek(0)
             json.dump(config, f)
 

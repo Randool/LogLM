@@ -13,7 +13,7 @@ from typing import List, Optional
 import torch
 from torch.utils.data import IterableDataset, Dataset
 
-from model_x.tokenizer import LogTruncation, LogLMTokenizer
+from model.tokenizer import LogTruncation, LogLMTokenizer
 
 Item = namedtuple("Items", ("input_ids", "token_type_ids", "cls_type_ids", "labels", "SO_label"))
 

@@ -17,7 +17,7 @@ from typing import List, Tuple, TextIO, Union, Iterable
 
 import thulac
 
-from model_x import LogLMTokenizer
+from model import LogLMTokenizer
 from utils.logger import get_logger
 
 
@@ -289,10 +289,10 @@ class MLMPreprocessor(Preprocessor):
             aligned_tokens_a = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_a)]
             aligned_tokens_b = [self.tokenizer.convert_tokens_to_ids(tokens) for tokens in self.do_align(tokens_b)]
             masked_pos = self.masked_pos(aligned_tokens_a, 0) + \
-                self.masked_pos(aligned_tokens_b, 0 + len(input_ids_a) + 1)
+                         self.masked_pos(aligned_tokens_b, 0 + len(input_ids_a) + 1)
         else:
             masked_pos = self.masked_pos(input_ids_a, 0) + \
-                self.masked_pos(input_ids_b, 0 + len(input_ids_a) + 1)
+                         self.masked_pos(input_ids_b, 0 + len(input_ids_a) + 1)
 
         return labels, masked_pos, token_type_lengths
 
@@ -300,9 +300,9 @@ class MLMPreprocessor(Preprocessor):
                                     token_type_lengths: Tuple[int, int], SO_label: int) -> None:
         """ Format: `labels|masked_pos|token_type_lengths|SO_label` """
         line = self.int_array_to_str(labels) + "|" + \
-            " ".join(masked_pos) + "|" + \
-            self.int_array_to_str(token_type_lengths) + "|" + \
-            str(SO_label) + "\n"
+               " ".join(masked_pos) + "|" + \
+               self.int_array_to_str(token_type_lengths) + "|" + \
+               str(SO_label) + "\n"
 
         self.writer.write(line)
 
@@ -571,6 +571,7 @@ if __name__ == "__main__":
     else:
         Processor = T5LikePreprocessor
 
+
     def wrapper(config_: Config, logpath_: str, input_file_: str, output_file_: str, epoch_: int):
         try:
             processor = Processor(config_, logpath_)
@@ -580,6 +581,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(e)
             traceback.print_exc()
+
 
     # get all input_files; each process deals with one input file.
     input_files = []

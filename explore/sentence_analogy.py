@@ -13,23 +13,26 @@ import torch
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer
 
-from model_x import LogLMTokenizer, LogLMForConditionalGeneration
+from model import LogLMTokenizer, LogLMForConditionalGeneration
 from wmd import WMD
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def load_tokenizer_and_model(model_type: str):
     if model_type == "loglm":
         model_path = "/home/randool/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_base_dec6_log2/checkpoint-500000"
         tokenizer: LogLMTokenizer = LogLMTokenizer.from_pretrained(model_path)
-        model: LogLMForConditionalGeneration = LogLMForConditionalGeneration.from_pretrained(model_path).eval().to(device)
+        model: LogLMForConditionalGeneration = LogLMForConditionalGeneration.from_pretrained(model_path).eval().to(
+            device)
 
     elif model_type == "bart":
-        tokenizer = BertTokenizer.from_pretrained(model_path)
-        model = BertModel.from_pretrained(model_path)
+        tokenizer = BertTokenizer.from_pretrained("model_path")
+        model = BertModel.from_pretrained("model_path")
 
     else:
         raise ValueError
-    
+
     return tokenizer, model
 
 
@@ -44,8 +47,6 @@ def load_sentence_pairs(data_path: str, count=-1):
 @torch.no_grad()
 def main():
     data_path = "/home/randool/Dataset/NLP/CBLUEDatasets/CHIP-STS/CHIP-STS_train.json"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
     tokenizer, model = load_tokenizer_and_model("loglm")
 
     pred_labels = []
@@ -72,7 +73,7 @@ def main():
     for i, pairs in enumerate(pred_labels, start=1):
         cnt_one += pairs[1]
         integration += cnt_one / i
-    
+
     print(integration / len(pred_labels))
 
 

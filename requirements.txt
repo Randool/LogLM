@@ -5,3 +5,4 @@ dataclasses~=0.8
 zhon~=1.1.5
 thulac
 datasets
+tqdm

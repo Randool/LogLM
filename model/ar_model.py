@@ -18,7 +18,7 @@ from transformers.models.bart.modeling_bart import BartEncoder, BartDecoder, shi
 from transformers.models.longformer.modeling_longformer import LongformerModel
 from transformers.utils import logging
 
-from .config import LogLMConfig
+from .ar_config import LogLMConfig
 
 logger = logging.get_logger(__name__)
 

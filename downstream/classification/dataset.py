@@ -93,14 +93,14 @@ class CollateFn:
 
 
 def gather_labels():
-    from debug_path import CBLUE_ROOT
+    from debug_path import CBLUE_PATH
     from collections import Counter
 
     def _gather(name: str):
         label_counter = Counter()
 
         for mode in ["train", "dev"]:
-            dataset = SentClassificationDataset(CBLUE_ROOT, name, mode)
+            dataset = SentClassificationDataset(CBLUE_PATH, name, mode)
             for example in dataset.examples:
                 label_counter[example["label"]] += 1
 
@@ -115,15 +115,15 @@ def gather_labels():
 
 
 def debug():
-    from debug_path import CBLUE_ROOT, BERT_BASE_MODEL_PATH
+    from debug_path import CBLUE_PATH, BERT_ZH_PATH
     from torch.utils.data import DataLoader
     from transformers import BertTokenizerFast
-    from utils import inputs_to_device
+    from downstream.utils.useful import inputs_to_device
 
-    tokenizer = BertTokenizerFast.from_pretrained(BERT_BASE_MODEL_PATH, do_lower_case=True)
+    tokenizer = BertTokenizerFast.from_pretrained(BERT_ZH_PATH, do_lower_case=True)
     for task_name in task_text_fields.keys():
         print(task_name)
-        dataset = SentClassificationDataset(CBLUE_ROOT, task_name, "dev")
+        dataset = SentClassificationDataset(CBLUE_PATH, task_name, "dev")
         for inputs in DataLoader(dataset, batch_size=3, shuffle=False, collate_fn=CollateFn(tokenizer, 64)):
             print(type(inputs))
             print(inputs_to_device(inputs, "cuda"))

@@ -15,7 +15,7 @@ import torch
 from dataclasses import dataclass, field
 from transformers import TrainingArguments, HfArgumentParser, set_seed
 
-from model import LogLMTokenizer, LogLMConfig, LogLMForPreTraining
+from model import LogLMTokenizer, LogLMNARConfig, LogLMForPreTraining
 from trainer import LogLMTrainer
 from utils import get_logger
 
@@ -144,10 +144,10 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer(dataArgs.vocabPath, log_base=dataArgs.log_base)
+    tokenizer = LogLMTokenizer(dataArgs.vocabPath, log_base=dataArgs.log_base, return_token_type=True)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
-    config = LogLMConfig(
+    config = LogLMNARConfig(
         vocab_size=len(tokenizer),
         hidden_size=modelArgs.hidden_size,
         num_hidden_layers=modelArgs.num_hidden_layers,
