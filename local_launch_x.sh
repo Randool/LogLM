@@ -4,27 +4,39 @@ set -e
 
 export MASTER_HOST=localhost
 export MASTER_PORT=$(python tools/find_unused_port.py)
+
 export SLURM_NNODES=1
 export SLURM_NODEID=0
+
 export nproc_per_node=1
+export per_device_train_batch_size=8
+export per_device_eval_batch_size=8
+export gradient_accumulation_steps=4
+export eval_accumulation_steps=1
 
-export PER_DEVICE_TRAIN_BATCH_SIZE=32
-export PER_DEVICE_EVAL_BATCH_SIZE=32
-export GRADIENT_ACCUMULATION_STEPS=1
-export EVAL_ACCUMULATION_STEPS=1
+export seed=42
+export gradient_checkpointing=false
+export ddp_find_unused_parameters=false  # Longformer need find_unused_para to be true
+export max_steps=-1
+export log_base=2
+export cls_len_disturb_rate=0.5
 
-export SEED=42
-export LOG_BASE=2
+export model_type=loglm  # loglm | longloglm | bart
+export model_size=tiny
+export log_cross_attn=true
+export hidden_size=512
+export num_hidden_layers=3
+export num_attention_heads=8
+export intermediate_size=2048
+export non_casual_layers=0
+export casual_layers=3
 
-export MODEL_SIZE=base
-export MODEL_TYPE=bart
-export HIDDEN_SIZE=256
-export NUM_HIDDEN_LAYERS=3
-export NUM_ATTENTION_HEADS=8
-export INTERMEDIATE_SIZE=1024
-export NON_CASUAL_LAYERS=0
-export CASUAL_LAYERS=3
-export SHARED_NON_CASUAL_DECODER=false
-# export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-100000
+export t5_mode=true
+
+export logging_steps=20
+export save_steps=1000
+export eval_steps=1000
+
+export resume_checkpoint=$HOME/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_tiny_dec3_log2_mlogn/checkpoint-1000
 
 ./dist_run_x.sh

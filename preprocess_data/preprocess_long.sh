@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess_long
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=50
 #SBATCH --mem=30G
 #SBATCH --output=./preprocess_long-%A.log
 #SBATCH --error=./preprocess_long-%A.log
 
 set -e
 
-TYPE='AR'
+TYPE='t5'  # mlm | bart | t5
 DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 
 NORMALIZED_TRAIN="${DATA_PATH}/normalized/train"
@@ -19,18 +19,18 @@ PROCESSED_DEV="${DATA_PATH}/processed/devL"
 
 MAX_SEQ_LEN=512
 MAX_PRED_PER_SEQ=76
-MAX_SEQ_LEN2=4096
+MAX_SEQ_LEN2=2048
 MAX_PRED_PER_SEQ2=256
 maskRatio=0.15
-EPOCH=5
+EPOCH=4
 SEED=42
 
 MERGE='true' # true | false
-SHUFFLE='false' # true | false
 RELEASE_CACHE='true' # true | false
 
 VOCAB_PATH="${HOME}/Projects/LogLM/preprocess_data/tokenizer/vocab.txt"
 
+set -x
 
 PYTHONPATH=.. \
 python preprocess.py \

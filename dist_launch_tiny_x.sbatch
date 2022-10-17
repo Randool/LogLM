@@ -1,51 +1,46 @@
 #!/bin/bash
 #SBATCH --job-name=dist_launch_tiny
-#SBATCH --partition=2080ti,gpu,a10
+#SBATCH --partition=a10
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --mem=50G
 #SBATCH --output=./dist_launch_tiny-%A-%a.log
 #SBATCH --error=./dist_launch_tiny-%A-%a.log
-#SBATCH --exclude=gqxx-01-[027,067,078,118,175]
-#SBATCH --array=1
+#SBATCH --exclude=
+#SBATCH --array=0
 
 set -e
 
 export MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=$(srun --nodes=1 --ntasks=1 --nodelist="${MASTER_HOST}" python tools/find_unused_port.py)
 
-export nproc_per_node=2
-export PER_DEVICE_TRAIN_BATCH_SIZE=64
-export PER_DEVICE_EVAL_BATCH_SIZE=64
-export GRADIENT_ACCUMULATION_STEPS=1
-export EVAL_ACCUMULATION_STEPS=1
+export nproc_per_node=4
+export per_device_train_batch_size=64
+export per_device_eval_batch_size=64
+export gradient_accumulation_steps=1
+export eval_accumulation_steps=1
 
-export SEED=42
-export MAX_STEPS=1000000
+export seed=42
+export gradient_checkpointing=false
+export ddp_find_unused_parameters=false  # Longformer need find_unused_para to be true
+export max_steps=-1
+export log_base=2
+export cls_len_disturb_rate=0.5
 
-export LOG_BASE=2
+export learning_rate=1e-3
 
-case ${SLURM_ARRAY_TASK_ID} in
-0)
-  export MODEL_TYPE=loglm
-  ;;
-1)
-  export MODEL_TYPE=bart
-  ;;
-*)
-  exit 1
-  ;;
-esac
+export model_type=loglm  # loglm | longloglm | bart
+export model_size=tiny
+export log_cross_attn=true
+export hidden_size=512
+export num_hidden_layers=3
+export num_attention_heads=8
+export intermediate_size=2048
+export non_casual_layers=0
+export casual_layers=3
 
-export MODEL_SIZE=tiny
-export HIDDEN_SIZE=256
-export NUM_HIDDEN_LAYERS=3
-export NUM_ATTENTION_HEADS=8
-export INTERMEDIATE_SIZE=1024
-export NON_CASUAL_LAYERS=0
-export CASUAL_LAYERS=3
-#export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base/checkpoint-50000
+export t5_mode=true
 
 srun ./dist_run_x.sh

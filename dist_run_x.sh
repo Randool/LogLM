@@ -1,115 +1,103 @@
 #!/bin/bash
 
-# Need:
-# - MASTER_HOST
-# - MASTER_PORT
-# - nproc_per_node
-# - PER_DEVICE_TRAIN_BATCH_SIZE
-# - PER_DEVICE_EVAL_BATCH_SIZE
-# - GRADIENT_ACCUMULATION_STEPS
-# - EVAL_ACCUMULATION_STEPS
-# - MODEL_SIZE= tiny | base | large
-# - HIDDEN_SIZE
-# - NUM_HIDDEN_LAYERS
-# - NUM_ATTENTION_HEADS
-# - INTERMEDIATE_SIZE
-# - NON_CASUAL_LAYERS
-# - CASUAL_LAYERS
-# - SHARED_NON_CASUAL_DECODER
+####################
+###### 必选参数 ######
+####################
 
+ddp_required_params=(
+  SLURM_NNODES
+  SLURM_NODEID
+  MASTER_HOST
+  MASTER_PORT
+  nproc_per_node
+)
+model_required_params=(
+  model_type
+  model_size
+  log_cross_attn
+  hidden_size
+  num_hidden_layers
+  num_attention_heads
+  intermediate_size
+  non_casual_layers
+  casual_layers
+  log_base
+  t5_mode
+)
+train_required_params=(
+  per_device_train_batch_size
+  per_device_eval_batch_size
+  gradient_accumulation_steps
+  eval_accumulation_steps
+)
+
+####################
+###### 参数检测 ######
+####################
 legal=true
 
-for slot in MASTER_HOST MASTER_PORT nproc_per_node PER_DEVICE_TRAIN_BATCH_SIZE PER_DEVICE_EVAL_BATCH_SIZE GRADIENT_ACCUMULATION_STEPS EVAL_ACCUMULATION_STEPS; do
-  if [ -z "${slot}" ]; then
-    echo "Require ${slot}"
+for slot in ${ddp_required_params[@]} ${model_required_params[@]} ${train_required_params[@]}; do
+  if [[ -z "${!slot}" ]]; then
+    echo "Require: ${slot}"
     legal=false
   fi
 done
 
-for slot in MODEL_TYPE MODEL_SIZE HIDDEN_SIZE NUM_HIDDEN_LAYERS NUM_ATTENTION_HEADS INTERMEDIATE_SIZE NON_CASUAL_LAYERS CASUAL_LAYERS SHARED_NON_CASUAL_DECODER; do
-  if [ -z "${slot}" ]; then
-    echo "Require ${slot}"
-    legal=false
-  fi
-done
+[[ ${legal} == false ]] && exit 1;
 
-if [[ ${legal} == false ]]; then
-  exit 255
-fi
-
+####################
+###### DDP参数 ######
+####################
 echo "<node_rank=${SLURM_NODEID}, nnodes=${SLURM_NNODES}> | MASTER_HOST=${MASTER_HOST}, \
-MASTER_PORT=${MASTER_PORT} | MODEL_SIZE=${MODEL_SIZE}, nproc_per_node=${nproc_per_node}"
+MASTER_PORT=${MASTER_PORT} | model_size=${model_size}, nproc_per_node=${nproc_per_node}"
 
 set -e
 
-# ******************* CONFIGURATION ******************* #
-# ==== data path ==== #
-if [ -z "${CORPUS_PATH}" ]; then
-  CORPUS_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
-fi
+########################
+###### data path #######
+########################
+CORPUS_PATH=${CORPUS_PATH:-"${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"}
 TRAIN_DATA_PATH="${CORPUS_PATH}/processed/trainL"
 EVAL_DATA_PATH="${CORPUS_PATH}/processed/devL"
+VOCAB_PATH=${VOCAB_PATH:-"${CORPUS_PATH}/tokenizer/vocab.txt"}
 
-if [ -z "${VOCAB_PATH}" ]; then
-  VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
-fi
-
-if [ -z "${LOG_BASE}" ]; then
-  LOG_BASE=2
-fi
-
-# ==== training hyper-parameters ==== #
-LEARNING_RATE=1e-4
-WEIGHT_DECAY=0.01
-if [ -z "${MAX_STEPS}" ]; then
-  MAX_STEPS=1000000
-fi
-NUM_TRAIN_EPOCHS=10
-LR_SCHEDULER_TYPE="linear"
-WARMUP_STEPS=10000
-LOGGING_STEPS=1000
-SAVE_STEPS=50000
-SAVE_TOTAL_LIMIT=20
-EVALUATION_STRATEGY="steps"
-EVAL_STEPS=50000
-DATALOADER_NUM_WORKERS=6
-LABEL_SMOOTHING_FACTOR=0
-
-if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
-  SHARED_NON_CASUAL_DECODER=false
-fi
-
-# ==== train path ==== #
-OUTPUT_DIR=${CORPUS_PATH}/ckpts/${MODEL_TYPE}_${MODEL_SIZE}
+########################
+###### train path ######
+########################
+OUTPUT_DIR=${CORPUS_PATH}/ckpts/${model_type}_${model_size}
 
 # +非自回归层数
-if ${SHARED_NON_CASUAL_DECODER}; then
-  OUTPUT_DIR=${OUTPUT_DIR}_shared_ndec
-elif [ ${NON_CASUAL_LAYERS} -gt 0 ]; then
-  OUTPUT_DIR=${OUTPUT_DIR}_ndec${NON_CASUAL_LAYERS}
+if [ ${non_casual_layers} -gt 0 ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_ndec${non_casual_layers}
 fi
 
 # +自回归层数
-if [ ${CASUAL_LAYERS} -gt 0 ]; then
-  OUTPUT_DIR=${OUTPUT_DIR}_dec${CASUAL_LAYERS}
-fi
-
-# +log_cross_attn
-if [ ${log_cross_attn} -eq 0 ]; then
-  OUTPUT_DIR=${OUTPUT_DIR}_Xnn
+if [ ${casual_layers} -gt 0 ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_dec${casual_layers}
 fi
 
 # +log底数
-OUTPUT_DIR=${OUTPUT_DIR}_log${LOG_BASE}
+OUTPUT_DIR=${OUTPUT_DIR}_log${log_base:-2}
 
+# +log_cross_attn
+if [ ${log_cross_attn} == false ]; then
+  OUTPUT_DIR=${OUTPUT_DIR}_mn
+else
+  OUTPUT_DIR=${OUTPUT_DIR}_mlogn
+fi
+
+echo ${OUTPUT_DIR}
+
+########################
+###### other path ######
+########################
 LOG_PATH="${OUTPUT_DIR}" # None means output to the stdout
 TENSORBOARD_LOG_PATH="${OUTPUT_DIR}/tensorboard"
 
-if [ -z "${RESUME_CHECKPOINT_PATH}" ]; then
-  RESUME_CHECKPOINT_PATH=None
-fi
-
-echo $OUTPUT_DIR
+########################
+######## Start  ########
+########################
+set -x
 
 OMP_NUM_THREADS=1 \
 python -um torch.distributed.launch \
@@ -119,51 +107,54 @@ python -um torch.distributed.launch \
     --master_addr     ${MASTER_HOST} \
     --master_port     ${MASTER_PORT} \
 main_x.py \
-    --seed                          ${SEED} \
-    --fp16                          true \
-    --ignore_data_skip              true \
+    --seed                          ${seed:-42} \
+    --fp16                          ${fp16:-false} \
+    --gradient_checkpointing        ${gradient_checkpointing:-false} \
+    --ddp_find_unused_parameters    ${ddp_find_unused_parameters:-false} \
+    --ignore_data_skip              false \
     \
     --trainDataPath                 ${TRAIN_DATA_PATH} \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \
     --logPath                       ${LOG_PATH} \
-    --train_file_pattern            'epoch-*.pretrain.data' \
-    --log_base                      ${LOG_BASE} \
+    --train_file_pattern            ${train_file_pattern:-'epoch-*.pretrain.data'} \
+    --max_length                    ${max_length:-512} \
+    --max_length2                   ${max_length2:-2048} \
+    --log_base                      ${log_base:-2} \
+    --cls_len_disturb_rate          ${cls_len_disturb_rate:-0} \
     \
-    --resume_checkpoint             ${RESUME_CHECKPOINT_PATH} \
-    --model_type                    ${MODEL_TYPE} \
+    --resume_checkpoint             ${resume_checkpoint:-none} \
+    --model_type                    ${model_type} \
     --t5_mode                       ${t5_mode} \
     --log_cross_attn                ${log_cross_attn} \
-    --hidden_size                   ${HIDDEN_SIZE} \
-    --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \
-    --num_attention_heads           ${NUM_ATTENTION_HEADS} \
-    --intermediate_size             ${INTERMEDIATE_SIZE} \
-    --shared_non_casual_decoder     ${SHARED_NON_CASUAL_DECODER} \
-    --num_non_casual_decoder_layers ${NON_CASUAL_LAYERS} \
-    --num_casual_decoder_layers     ${CASUAL_LAYERS} \
+    --hidden_size                   ${hidden_size} \
+    --num_hidden_layers             ${num_hidden_layers} \
+    --num_attention_heads           ${num_attention_heads} \
+    --intermediate_size             ${intermediate_size} \
+    --num_non_casual_decoder_layers ${non_casual_layers} \
+    --num_casual_decoder_layers     ${casual_layers} \
     \
     --output_dir                    ${OUTPUT_DIR} \
-    --learning_rate                 ${LEARNING_RATE} \
-    --evaluation_strategy           ${EVALUATION_STRATEGY} \
-    --per_device_train_batch_size   ${PER_DEVICE_TRAIN_BATCH_SIZE} \
-    --per_device_eval_batch_size    ${PER_DEVICE_EVAL_BATCH_SIZE} \
-    --gradient_accumulation_steps   ${GRADIENT_ACCUMULATION_STEPS} \
-    --eval_accumulation_steps       ${EVAL_ACCUMULATION_STEPS} \
-    --weight_decay                  ${WEIGHT_DECAY} \
-    --max_steps                     ${MAX_STEPS} \
-    --num_train_epochs              ${NUM_TRAIN_EPOCHS} \
-    --lr_scheduler_type             ${LR_SCHEDULER_TYPE} \
-    --warmup_steps                  ${WARMUP_STEPS} \
+    --learning_rate                 ${learning_rate:-1e-4} \
+    --evaluation_strategy           ${evaluation_strategy:-steps} \
+    --per_device_train_batch_size   ${per_device_train_batch_size} \
+    --per_device_eval_batch_size    ${per_device_eval_batch_size} \
+    --gradient_accumulation_steps   ${gradient_accumulation_steps} \
+    --eval_accumulation_steps       ${eval_accumulation_steps} \
+    --weight_decay                  ${weight_decay:-0.01} \
+    --max_steps                     ${max_steps:-1000000} \
+    --num_train_epochs              ${num_train_epochs:-10} \
+    --lr_scheduler_type             ${lr_scheduler_type:-linear} \
+    --warmup_ratio                  ${warmup_ratio:-0.05} \
     --logging_dir                   ${TENSORBOARD_LOG_PATH} \
     --logging_first_step            true \
-    --logging_steps                 ${LOGGING_STEPS} \
+    --logging_steps                 ${logging_steps:-1000} \
     \
-    --save_steps                    ${SAVE_STEPS} \
-    --save_total_limit              ${SAVE_TOTAL_LIMIT} \
-    --eval_steps                    ${EVAL_STEPS} \
-    --dataloader_num_workers        ${DATALOADER_NUM_WORKERS} \
-    --label_smoothing_factor        ${LABEL_SMOOTHING_FACTOR} \
-    --ddp_find_unused_parameters    true \
+    --save_steps                    ${save_steps:-50000} \
+    --save_total_limit              ${save_total_limit:-10} \
+    --eval_steps                    ${eval_steps:-50000} \
+    --dataloader_num_workers        ${dataloader_num_workers:-6} \
+    --label_smoothing_factor        ${label_smoothing_factor:-0} \
     --load_best_model_at_end        true \
-    --metric_for_best_model         loss \
-    --greater_is_better             false
+    --metric_for_best_model         ${metric_for_best_model:-loss} \
+    --greater_is_better             ${greater_is_better:-false}

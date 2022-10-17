@@ -44,26 +44,17 @@ set -e
 
 # ******************* CONFIGURATION ******************* #
 # ==== data path ==== #
-if [ -z "${CORPUS_PATH}" ]; then
-  CORPUS_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
-fi
+CORPUS_PATH=${CORPUS_PATH:-"${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"}
 TRAIN_DATA_PATH="${CORPUS_PATH}/processed/train"
 EVAL_DATA_PATH="${CORPUS_PATH}/processed/dev"
+VOCAB_PATH=${VOCAB_PATH:-"${CORPUS_PATH}/tokenizer/vocab.txt"}
 
-if [ -z "${VOCAB_PATH}" ]; then
-  VOCAB_PATH="${CORPUS_PATH}/tokenizer/vocab.txt"
-fi
+LOG_BASE=${LOG_BASE:-2}
 
-if [ -z "${LOG_BASE}" ]; then
-  LOG_BASE=2
-fi
-
-# ==== training hyperparameters ==== #
+# ==== training hyper-parameters ==== #
 LEARNING_RATE=1e-4
 WEIGHT_DECAY=0.01
-if [ -z "${MAX_STEPS}" ]; then
-  MAX_STEPS=1000000
-fi
+MAX_STEPS=${MAX_STEPS:-1000000}
 NUM_TRAIN_EPOCHS=10
 LR_SCHEDULER_TYPE="linear"
 WARMUP_STEPS=10000
@@ -79,9 +70,8 @@ if [ -z "${NUM_EXAMPLES_FOR_EPOCH}" ]; then
   NUM_EXAMPLES_FOR_EPOCH="38944777 38944777 38944777 17901367"
 fi
 
-if [ -z "${SHARED_NON_CASUAL_DECODER}" ]; then
-  SHARED_NON_CASUAL_DECODER=false
-fi
+SHARED_NON_CASUAL_DECODER=${SHARED_NON_CASUAL_DECODER:-false}
+
 
 # ==== train path ==== #
 OUTPUT_DIR=${CORPUS_PATH}/ckpts/${MODEL_SIZE}
@@ -103,10 +93,7 @@ OUTPUT_DIR=${OUTPUT_DIR}_log${LOG_BASE}
 
 LOG_PATH="${OUTPUT_DIR}" # None means output to the stdout
 TENSORBOARD_LOG_PATH="${OUTPUT_DIR}/tensorboard"
-
-if [ -z "${RESUME_CHECKPOINT_PATH}" ]; then
-  RESUME_CHECKPOINT_PATH=None
-fi
+RESUME_CHECKPOINT_PATH=${RESUME_CHECKPOINT_PATH:-None}
 
 echo $OUTPUT_DIR
 
@@ -119,11 +106,15 @@ python -um torch.distributed.launch \
     --master_port     ${MASTER_PORT} \
 main.py \
     --seed                          ${SEED} \
+    --fp16                          false \
+    --ignore_data_skip              false \
+    \
     --trainDataPath                 ${TRAIN_DATA_PATH} \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \
     --logPath                       ${LOG_PATH} \
     --log_base                      ${LOG_BASE} \
+    \
     --resume_checkpoint             ${RESUME_CHECKPOINT_PATH} \
     --hidden_size                   ${HIDDEN_SIZE} \
     --num_hidden_layers             ${NUM_HIDDEN_LAYERS} \

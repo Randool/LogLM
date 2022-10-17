@@ -3,9 +3,9 @@
 #SBATCH --partition=2080ti,gpu,a10
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=10
+#SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:2
-#SBATCH --mem=10G
+#SBATCH --mem=40G
 #SBATCH --output=./dist_launch_tiny-%A-%a.log
 #SBATCH --error=./dist_launch_tiny-%A-%a.log
 #SBATCH --exclude=gqxx-01-[027,067,078,118,175]
@@ -14,7 +14,7 @@
 set -e
 
 export MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
-export MASTER_PORT=`srun --nodes=1 --ntasks=1 --nodelist=${MASTER_HOST} python tools/find_unused_port.py`
+export MASTER_PORT=$(srun --nodes=1 --ntasks=1 --nodelist="${MASTER_HOST}" python tools/find_unused_port.py)
 
 export nproc_per_node=2
 export PER_DEVICE_TRAIN_BATCH_SIZE=64
@@ -29,10 +29,10 @@ log_bases=(2 2.23 2.72 4 1024)  # 7,6,5,4,1
 export LOG_BASE=${log_bases[${SLURM_ARRAY_TASK_ID}]}
 
 export MODEL_SIZE=tiny
-export HIDDEN_SIZE=256
+export HIDDEN_SIZE=512
 export NUM_HIDDEN_LAYERS=6
 export NUM_ATTENTION_HEADS=8
-export INTERMEDIATE_SIZE=1024
+export INTERMEDIATE_SIZE=2048
 export NON_CASUAL_LAYERS=1
 export CASUAL_LAYERS=0
 export SHARED_NON_CASUAL_DECODER=false

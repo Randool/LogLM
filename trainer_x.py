@@ -52,29 +52,38 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
             tokenizer: LogLMTokenizer,
             train_data_files: List[str],
             eval_data_file: str,
+            max_length: int,
+            max_length2: int,
             use_cls_ids: bool,
             t5_mode: bool,
+            cls_len_disturb_rate: float,
             indexes_suffix: str = ".index",
             logger: logging.Logger = None,
     ):
         self.train_data_files = train_data_files
+        self.max_length = max_length
+        self.max_length2 = max_length2
         self.use_cls_ids = use_cls_ids
         self.indexes_suffix = indexes_suffix
         self.epoch_idx = 0
         self.log_base = tokenizer.log_base
         self.t5_mode = t5_mode
+        self.cls_len_disturb_rate = cls_len_disturb_rate
 
         self.train_dataset = DatasetWithIndex(
             data_file=train_data_files[self.epoch_idx],
             tokenizer=tokenizer,
+            max_length=self.max_length if (1 < len(self.train_data_files) != self.epoch_idx + 1) else self.max_length2,
             log_base=self.log_base,
             nar_mode=False,
             t5_mode=t5_mode,
             return_cls_ids=self.use_cls_ids,
+            cls_len_disturb_rate=self.cls_len_disturb_rate,
         )
         self.eval_dataset = DatasetWithIndex(
             data_file=eval_data_file,
             tokenizer=tokenizer,
+            max_length=self.max_length2,
             log_base=self.log_base,
             nar_mode=False,
             t5_mode=t5_mode,
@@ -116,9 +125,9 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
         setattr(self, "_gradient_accumulation_steps", self.args.gradient_accumulation_steps)
 
         if self.epoch_idx + 1 == len(self.train_data_files):
-            per_device_train_batch_size = max(1, per_device_train_batch_size // 8)
+            per_device_train_batch_size = max(1, per_device_train_batch_size // 16)
             train_batch_size = per_device_train_batch_size * max(1, self.args.n_gpu)
-            self.args.gradient_accumulation_steps = getattr(self, "_gradient_accumulation_steps") * 8
+            self.args.gradient_accumulation_steps = getattr(self, "_gradient_accumulation_steps") * 16
         else:
             self.args.gradient_accumulation_steps = getattr(self, "_gradient_accumulation_steps")
 
@@ -156,10 +165,12 @@ class Seq2SeqTrainerPro(Seq2SeqTrainer):
         self.train_dataset = DatasetWithIndex(
             data_file=self.train_data_files[self.epoch_idx],
             tokenizer=self.tokenizer,
+            max_length=self.max_length if (1 < len(self.train_data_files) != self.epoch_idx + 1) else self.max_length2,
             log_base=self.log_base,
             nar_mode=False,
             t5_mode=self.t5_mode,
             return_cls_ids=self.use_cls_ids,
+            cls_len_disturb_rate=self.cls_len_disturb_rate,
         )
 
         return self.get_train_dataloader()

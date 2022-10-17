@@ -30,8 +30,13 @@ class DataArguments:
     train_file_pattern: str = field(default="epoch-*.pretrain.data.shuf")
     dev_file_pattern: str = field(default="dev.data")
 
+    max_length: int = field(default=512)
+    max_length2: int = field(default=2048)
+
     log_base: float = field(default=2, metadata={"help": "Log base"})
     anchored_length: int = field(default=-1, metadata={"help": "Anchor length"})
+
+    cls_len_disturb_rate: float = field(default=0, metadata={"help": "CLS length variation range"})
 
     @property
     def train_data_files(self) -> List[str]:
@@ -104,8 +109,6 @@ class ModelArguments:
         metadata={"help": "Whether or not the model should return the last "
                           "key/values attentions (not used by all models)"},
     )
-    shared_non_casual_decoder: Optional[bool] = field(default=False,
-                                                      metadata={"help": "Share encoder and non-casual decoder"})
     num_non_casual_decoder_layers: Optional[int] = field(default=3,
                                                          metadata={"help": "Layers number of non-casual decoder"})
     num_casual_decoder_layers: Optional[int] = field(default=3,

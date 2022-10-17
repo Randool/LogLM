@@ -3,7 +3,7 @@
 #SBATCH --partition=2080ti,gpu,a10
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=18
+#SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:4
 #SBATCH --mem=60G
 #SBATCH --output=./dist_launch_base-%A-%a.log
@@ -17,35 +17,27 @@ export MASTER_HOST=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=$(srun --nodes=1 --ntasks=1 --nodelist="${MASTER_HOST}" python tools/find_unused_port.py)
 
 export nproc_per_node=4
-export PER_DEVICE_TRAIN_BATCH_SIZE=32
-export PER_DEVICE_EVAL_BATCH_SIZE=32
-export GRADIENT_ACCUMULATION_STEPS=1
-export EVAL_ACCUMULATION_STEPS=2
+export per_device_train_batch_size=8
+export per_device_eval_batch_size=8
+export gradient_accumulation_steps=2
+export eval_accumulation_steps=1
 
-export SEED=42
-export MAX_STEPS=1000000
+export seed=42
+export max_steps=-1
 
-export LOG_BASE=2
+export log_base=2
+export cls_len_disturb_rate=0.2
 
-case ${SLURM_ARRAY_TASK_ID} in
-0)
-  export MODEL_TYPE=loglm
-  ;;
-1)
-  export MODEL_TYPE=bart
-  ;;
-*)
-  exit 1
-  ;;
-esac
+export model_type=loglm  # loglm | longloglm | bart
+export model_size=base
+export log_cross_attn=true
+export hidden_size=768
+export num_hidden_layers=6
+export num_attention_heads=12
+export intermediate_size=3072
+export non_casual_layers=0
+export casual_layers=6
 
-export MODEL_SIZE=base
-export HIDDEN_SIZE=768
-export NUM_HIDDEN_LAYERS=6
-export NUM_ATTENTION_HEADS=12
-export INTERMEDIATE_SIZE=3072
-export NON_CASUAL_LAYERS=0
-export CASUAL_LAYERS=6
-#export RESUME_CHECKPOINT_PATH=/mnt/lustre/sjtu/home/lfd98/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/base_dec6_log2/checkpoint-50000
+export t5_mode=true
 
 srun ./dist_run_x.sh

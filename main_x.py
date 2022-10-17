@@ -103,8 +103,11 @@ def main(_args: List[str] = None):
         tokenizer=tokenizer,
         train_data_files=data_args.train_data_files,
         eval_data_file=data_args.eval_data_file,
+        max_length=data_args.max_length,
+        max_length2=data_args.max_length2,
         use_cls_ids=("loglm" in model_args.model_type.lower()),
         t5_mode=model_args.t5_mode,
+        cls_len_disturb_rate=data_args.cls_len_disturb_rate,
         logger=logger,
     )
 
