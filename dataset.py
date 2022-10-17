@@ -8,6 +8,7 @@
 import random
 import warnings
 from collections import namedtuple
+from math import floor, ceil
 from typing import List, Optional
 
 import torch
@@ -64,6 +65,8 @@ def trim_ids(ids: List[Optional[int]], target_len: int, has_bos: bool, has_eos: 
 
 def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_length: int = None,
                          nar_mode: bool = True) -> Item:
+    warnings.warn("`legacy_parse_example` is deprecated", DeprecationWarning)
+
     # Format: `labels|masked_pos|token_type_lengths|cls_length|SO_label` or `labels|masked_pos`
     labels_, masked_pos, token_type_lengths, SO_label = line.split("|")
     token_ids = str_to_int_array(labels_)
@@ -78,7 +81,6 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     cls_len, len_ids, len_pair_ids = truncation.truncated_length(token_type_lengths[0] - (not nar_mode),
                                                                  token_type_lengths[1],
                                                                  max_length)
-    assert cls_len <= 12, f"`cls_length` ({cls_len}) > 12 is not supported"
 
     cls_ids = [i for i in range(1, cls_len + 1)]
     if nar_mode:
@@ -104,9 +106,16 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     )
 
 
-def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, eos_token_id: int,
-                  max_length: int = None) -> Item:
-    # Format: `labels|masked_pos`
+def parse_example(line: str, tokenizer: LogLMTokenizer, max_length: int = None,
+                  cls_len_disturb_rate: float = 0.0) -> Item:
+    """
+    Parse example of T5-task format: `a b c d e f g|A-B C D-E`
+
+    :param line: Example line.
+    :param tokenizer:       LogLMTokenizer.
+    :param max_length:      Max sequence length.
+    :param cls_len_disturb_rate: If not 0, the length of CLS will increase or decrease randomly by this rate.
+    """
     labels_, masked_pos = line.split("|")
     token_ids = str_to_int_array(labels_)
     masked_pos = expand_masked_spans(masked_pos)
@@ -115,14 +124,19 @@ def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, eos_
     for pos in masked_pos:
         token_ids[pos] = -token_ids[pos]
 
-    cls_len, len_ids, _len_pair_ids = truncation.truncated_length(len(token_ids), max_length)
-    assert cls_len <= 12, f"`cls_length` ({cls_len}) > 12 is not supported"
+    cls_len, len_ids, _len_pair_ids = tokenizer.truncated_length(len(token_ids), max_length)
 
-    cls_ids = [i for i in range(1, cls_len + 1)]
+    if cls_len_disturb_rate > 0:
+        cls_len = random.randint(
+            max(1, floor(cls_len * (1 - cls_len_disturb_rate))),
+            ceil(cls_len * (1 + cls_len_disturb_rate))
+        )
+
+    cls_ids = [tokenizer.cls_token_id] * cls_len
     ids = trim_ids(token_ids, len_ids, False, False, direct="any")
 
-    input_ids = cls_ids + [x if x > 0 else mask_token_id for x in ids] + [eos_token_id]
-    labels = cls_ids[:1] + [abs(x) for x in ids] + [eos_token_id]
+    input_ids = cls_ids + [x if x > 0 else tokenizer.mask_token_id for x in ids] + [tokenizer.eos_token_id]
+    labels = cls_ids[:1] + [abs(x) for x in ids] + [tokenizer.eos_token_id]
     cls_type_ids = [1] * cls_len + [0] * (len_ids + 1)
 
     return Item(
@@ -134,8 +148,16 @@ def parse_example(line: str, truncation: LogTruncation, mask_token_id: int, eos_
     )
 
 
-def parse_example_t5(line: str, truncation: LogTruncation, t5_mask_token_ids: List[int], eos_token_id: int,
-                     max_length: int = None) -> Item:
+def parse_example_t5(line: str, tokenizer: LogLMTokenizer, max_length: int = None,
+                     cls_len_disturb_rate: float = 0.0) -> Item:
+    """
+    Parse example of T5-task format: `a b c d e f g|A-B C D-E`
+
+    :param line: Example line.
+    :param tokenizer:       LogLMTokenizer.
+    :param max_length:      Max sequence length.
+    :param cls_len_disturb_rate: If not 0, the length of CLS will increase or decrease randomly by this rate.
+    """
     labels_, masked_pos = line.split("|")
     token_ids = str_to_int_array(labels_)
     masked_pos = expand_masked_spans(masked_pos)
@@ -144,8 +166,10 @@ def parse_example_t5(line: str, truncation: LogTruncation, t5_mask_token_ids: Li
 
     _input_ids = []
 
+    # State is switch between in-masked-span and normal
     NORMAL, IN_MASK = 1, 2
     STATE = NORMAL
+    t5_mask_token_ids = tokenizer.additional_special_tokens_ids
 
     for i, _id in enumerate(token_ids):
         if msk_idx < len(masked_pos) and i == masked_pos[msk_idx]:
@@ -161,14 +185,19 @@ def parse_example_t5(line: str, truncation: LogTruncation, t5_mask_token_ids: Li
                 STATE = NORMAL
             _input_ids.append(_id)
 
-    cls_len, len_ids, _len_pair_ids = truncation.truncated_length(len(_input_ids), max_length)
-    assert cls_len <= 12, f"`cls_length` ({cls_len}) > 12 is not supported"
+    cls_len, len_ids, _len_pair_ids = tokenizer.truncated_length(len(_input_ids), max_length)
 
-    cls_ids = list(range(1, cls_len + 1))
+    if cls_len_disturb_rate > 0:
+        cls_len = random.randint(
+            max(1, floor(cls_len * (1 - cls_len_disturb_rate))),
+            ceil(cls_len * (1 + cls_len_disturb_rate))
+        )
+
+    cls_ids = [tokenizer.cls_token_id] * cls_len
     _input_ids = trim_ids(_input_ids, len_ids, False, False, direct="any")
 
-    input_ids = cls_ids + [x if isinstance(x, int) else x[0] for x in _input_ids] + [eos_token_id]
-    labels = cls_ids[:1] + [_x for x in _input_ids if isinstance(x, list) for _x in x] + [eos_token_id]
+    input_ids = cls_ids + [x if isinstance(x, int) else x[0] for x in _input_ids] + [tokenizer.eos_token_id]
+    labels = cls_ids[:1] + [_x for x in _input_ids if isinstance(x, list) for _x in x] + [tokenizer.eos_token_id]
     cls_type_ids = [1] * cls_len + [0] * (len(input_ids) - cls_len)
 
     return Item(
@@ -265,24 +294,23 @@ class DatasetForShuffledFile(IterableDataset):
 
 
 class DatasetWithIndex(Dataset):
-    def __init__(self, data_file: str, tokenizer: LogLMTokenizer, log_base=2, nar_mode=False, t5_mode=False,
-                 return_cls_ids=True, index_suffix: str = ".index"):
+    def __init__(self, data_file: str, tokenizer: LogLMTokenizer, max_length: int, log_base: int = None, nar_mode=False,
+                 t5_mode=False, return_cls_ids=True, cls_len_disturb_rate=0.0, index_suffix: str = ".index"):
         self.data_file = data_file
         self.indexes = self.parse_index(data_file + index_suffix)
+
+        self.max_length = max_length
         self.nar_mode = nar_mode
         self.t5_mode = t5_mode
+        self.cls_len_disturb_rate = cls_len_disturb_rate
 
-        self.pad_token_id = tokenizer.pad_token_id
-        self.mask_token_id = tokenizer.mask_token_id
-        self.eos_token_id = tokenizer.eos_token_id
+        self.tokenizer = tokenizer
+        self.tokenizer.set_log_base_or_anchored_length(log_base=log_base)
 
-        self.t5_mask_token_ids = tokenizer.additional_special_tokens_ids
-
-        if t5_mode and self.t5_mask_token_ids is None:
+        if t5_mode and tokenizer.additional_special_tokens_ids is None:
             raise ValueError("`t5_mask_token_ids` should be given under T5-mode")
 
-        self._trunc = LogTruncation(log_base=log_base)
-        self.collate_fn = CollateFn(self.mask_token_id, self.pad_token_id, nar_mode, return_cls_ids)
+        self.collate_fn = CollateFn(tokenizer.mask_token_id, tokenizer.pad_token_id, nar_mode, return_cls_ids)
 
     @staticmethod
     def parse_index(index_file: str) -> List[int]:
@@ -295,9 +323,14 @@ class DatasetWithIndex(Dataset):
 
     def __getitem__(self, index):
         idx = self.indexes[index]
+
         with open(self.data_file, "rb") as f:
             f.seek(idx)
             line = f.readline().decode()
+
         if self.t5_mode:
-            return parse_example_t5(line, self._trunc, self.t5_mask_token_ids, self.eos_token_id)
-        return parse_example(line, self._trunc, self.mask_token_id, self.eos_token_id)
+            return parse_example_t5(line, tokenizer=self.tokenizer, max_length=self.max_length,
+                                    cls_len_disturb_rate=self.cls_len_disturb_rate)
+
+        return parse_example(line, tokenizer=self.tokenizer, max_length=self.max_length,
+                             cls_len_disturb_rate=self.cls_len_disturb_rate)

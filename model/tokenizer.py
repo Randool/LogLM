@@ -6,9 +6,9 @@
 @Version     :  1.0
 @Description :  BertTokenizer with variable length of `[CLS]`
 """
-from contextlib import contextmanager
 import json
 import os
+from contextlib import contextmanager
 from itertools import chain
 from math import ceil, log, floor
 from typing import Optional, List, Union, Dict, Tuple
@@ -136,6 +136,7 @@ class LogLMTokenizer(BertTokenizer):
         self.bos_token = self.cls_token
         self.eos_token = self.sep_token
 
+        self.return_token_type = return_token_type
         if return_token_type:
             self.model_input_names.append("token_type_ids")
 
@@ -151,6 +152,11 @@ class LogLMTokenizer(BertTokenizer):
     @property
     def anchored_length(self):
         return self.log_truncation.anchored_length
+
+    def truncated_length(
+            self, len_ids: int, len_pair_ids: int = None, max_length: int = None
+    ) -> Tuple[int, int, int]:
+        return self.log_truncation.truncated_length(len_ids, len_pair_ids, max_length)
 
     def _pad(
             self,
