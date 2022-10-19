@@ -29,7 +29,7 @@ export max_steps=-1
 export log_base=2
 export cls_len_disturb_rate=0.5
 
-export learning_rate=1e-3
+export learning_rate=5e-4
 
 export model_type=loglm  # loglm | longloglm | bart
 export model_size=tiny

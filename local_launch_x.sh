@@ -21,6 +21,8 @@ export max_steps=-1
 export log_base=2
 export cls_len_disturb_rate=0.5
 
+export learning_rate=5e-4
+
 export model_type=loglm  # loglm | longloglm | bart
 export model_size=tiny
 export log_cross_attn=true
@@ -33,10 +35,11 @@ export casual_layers=3
 
 export t5_mode=true
 
-export logging_steps=20
-export save_steps=1000
-export eval_steps=1000
+export logging_steps=200
+export save_steps=2000
+export eval_steps=2000
 
-export resume_checkpoint=$HOME/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_tiny_dec3_log2_mlogn/checkpoint-1000
+export resume_checkpoint=$HOME/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_tiny_dec3_log2_mlogn/checkpoint-12000
+export optim=adafactor  # adamw_torch | adafactor
 
 ./dist_run_x.sh

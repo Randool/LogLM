@@ -27,7 +27,7 @@ class DataArguments:
     vocabPath: str = field(metadata={"help": "vocabulary path"})
     num_examples_for_epoch: List[int] = field(default=None, metadata={"help": "Training example numbers of each epoch"})
     logPath: str = field(default=None, metadata={"help": "logger output path"})
-    train_file_pattern: str = field(default="epoch-*.pretrain.data.shuf")
+    train_file_pattern: str = field(default="epoch-*.pretrain.data")
     dev_file_pattern: str = field(default="dev.data")
 
     max_length: int = field(default=512)
@@ -41,7 +41,7 @@ class DataArguments:
     @property
     def train_data_files(self) -> List[str]:
         train_data_files = glob.glob(join(self.trainDataPath, self.train_file_pattern))
-        return sorted(train_data_files, key=lambda x: int(split(x)[-1].split(".")[0][6:]))
+        return sorted(train_data_files, key=lambda x: int(split(x)[-1].split(".")[0][6:].split("-")[0]))
 
     @property
     def eval_data_file(self) -> str:

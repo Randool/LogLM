@@ -119,7 +119,7 @@ main_x.py \
     --logPath                       ${LOG_PATH} \
     --train_file_pattern            ${train_file_pattern:-'epoch-*.pretrain.data'} \
     --max_length                    ${max_length:-512} \
-    --max_length2                   ${max_length2:-2048} \
+    --max_length2                   ${max_length2:-1024} \
     --log_base                      ${log_base:-2} \
     --cls_len_disturb_rate          ${cls_len_disturb_rate:-0} \
     \
@@ -155,6 +155,7 @@ main_x.py \
     --eval_steps                    ${eval_steps:-50000} \
     --dataloader_num_workers        ${dataloader_num_workers:-6} \
     --label_smoothing_factor        ${label_smoothing_factor:-0} \
+    --optim                         ${optim:-adafactor} \
     --load_best_model_at_end        true \
     --metric_for_best_model         ${metric_for_best_model:-loss} \
     --greater_is_better             ${greater_is_better:-false}

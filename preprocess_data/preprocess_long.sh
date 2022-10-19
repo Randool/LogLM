@@ -17,13 +17,13 @@ NORMALIZED_DEV="${DATA_PATH}/normalized/dev"
 PROCESSED_TRAIN="${DATA_PATH}/processed/trainL"
 PROCESSED_DEV="${DATA_PATH}/processed/devL"
 
-MAX_SEQ_LEN=512
-MAX_PRED_PER_SEQ=76
-MAX_SEQ_LEN2=2048
-MAX_PRED_PER_SEQ2=256
-maskRatio=0.15
-EPOCH=4
-SEED=42
+MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
+MAX_PRED_PER_SEQ=${MAX_PRED_PER_SEQ:-16}
+MAX_SEQ_LEN2=${MAX_SEQ_LEN2:-512}
+MAX_PRED_PER_SEQ2=${MAX_PRED_PER_SEQ2:-64}
+maskRatio=${maskRatio:-0.15}
+EPOCH=${EPOCH:-4}
+SEED=${SEED:-42}
 
 MERGE='true' # true | false
 RELEASE_CACHE='true' # true | false
@@ -48,7 +48,7 @@ python preprocess.py \
     --WWM \
     --input_path        ${NORMALIZED_TRAIN} \
     --output_path       ${PROCESSED_TRAIN} \
-    --processNum        30 \
+    --processNum        ${processNum:-50} \
     --maskRatio         ${maskRatio} \
     --logPath           "${DATA_PATH}/logs" \
     --seed              ${SEED}
@@ -61,7 +61,8 @@ if [[ ${MERGE} == 'true' ]]; then
 
         if [[ -d ${EPOCH_PATH} ]]; then
             echo "merging data in: ${EPOCH_PATH}"
-            cat ${EPOCH_PATH}/* > "${EPOCH_PATH}.pretrain.data"
+            length=$(echo ${epoch} | grep -Eo "L[0-9]+")
+            cat ${EPOCH_PATH}/* > "${EPOCH_PATH}.${length}.pretrain.data"
             if [[ ${RELEASE_CACHE} == 'true' ]]; then
                 rm -rf ${EPOCH_PATH}
             fi
@@ -81,7 +82,7 @@ python preprocess.py \
     --WWM \
     --input_path        ${NORMALIZED_DEV} \
     --output_path       ${PROCESSED_DEV} \
-    --processNum        30 \
+    --processNum        ${processNum:-50} \
     --maskRatio         ${maskRatio} \
     --logPath           "${DATA_PATH}/logs" \
     --seed              ${SEED}

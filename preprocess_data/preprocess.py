@@ -598,11 +598,6 @@ if __name__ == "__main__":
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
 
-    for epoch in range(args.dupEpochNum):
-        epochPath = join(args.output_path, f"epoch-{epoch}")
-        if not os.path.exists(epochPath):
-            os.makedirs(epochPath)
-
     total = args.dupEpochNum * len(input_files)
     poolSize = min(args.processNum, total, multiprocessing.cpu_count())
     logger.info(f"Process number: {poolSize}")
@@ -616,7 +611,10 @@ if __name__ == "__main__":
                 curr_config.maxPredPerSeq = curr_config.maxPredPerSeq2
 
             for index, input_file in enumerate(input_files):
-                output_file = join(args.output_path, f"epoch-{epoch}", os.path.basename(input_file))
+                output_dir = join(args.output_path, f"epoch-{epoch}-L{curr_config.maxSeqLen}")
+                os.makedirs(output_dir, exist_ok=True)
+                output_file = join(output_dir, os.path.basename(input_file))
+
                 logger.info(
                     f"launching worker (epoch {epoch}, file {os.path.basename(input_file)})\n"
                     f"      >>> input file:  {input_file}\n"
@@ -630,8 +628,16 @@ if __name__ == "__main__":
 
     else:
         for epoch in range(args.dupEpochNum):
+            curr_config = copy.deepcopy(config)  # Configure isolation
+            if epoch == args.dupEpochNum - 1:
+                curr_config.maxSeqLen = curr_config.maxSeqLen2
+                curr_config.maxPredPerSeq = curr_config.maxPredPerSeq2
+
             for index, input_file in enumerate(input_files):
-                output_file = join(join(args.output_path, f"epoch-{epoch}"), os.path.basename(input_file))
+                output_dir = join(args.output_path, f"epoch-{epoch}-L{curr_config.maxSeqLen}")
+                os.makedirs(output_dir, exist_ok=True)
+                output_file = join(output_dir, os.path.basename(input_file))
+
                 logger.info(
                     f"launching worker (epoch {epoch}, file {os.path.basename(input_file)})\n"
                     f"      >>> input file: {input_file}\n"
