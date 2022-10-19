@@ -343,9 +343,10 @@ class LongLogLM(BartPretrainedModel):
 
 
 class LogLMForConditionalGeneration(BartPretrainedModel):
-    base_model_prefix = "model"
-    _keys_to_ignore_on_load_missing = [r"final_logits_bias", r"lm_head\.weight"]
     config_class = LogLMConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+    _keys_to_ignore_on_load_missing = [r"final_logits_bias", r"lm_head\.weight"]
 
     def __init__(self, config: LogLMConfig):
         super().__init__(config)
@@ -535,3 +536,7 @@ class LogLMForConditionalGeneration(BartPretrainedModel):
             model_kwargs["encoder_outputs"].last_hidden_state = last_state
 
         return model_kwargs
+
+    def _set_gradient_checkpointing(self, module, value=False):
+        if isinstance(module, (LogLM, LongformerModel, BartDecoder)):
+            module.gradient_checkpointing = value

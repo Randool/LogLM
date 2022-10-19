@@ -28,10 +28,10 @@ class LogLMNARConfig(BertConfig):
             type_vocab_size=2,
             initializer_range=0.02,
             layer_norm_eps=1e-12,
-            bos_token_id=1,
             pad_token_id=0,
-            eos_token_id=14,
-            mask_token_id=15,
+            bos_token_id=1,
+            eos_token_id=3,
+            mask_token_id=4,
             position_embedding_type="absolute",
             use_cache=True,
             classifier_dropout=None,
@@ -91,10 +91,10 @@ class LogLMNARConfig(BertConfig):
             attention_dropout=self.attention_probs_dropout_prob,
             num_labels=2,
             pad_token_id=0,
-            bos_token_id=14,  # [SEP]
-            eos_token_id=14,
-            decoder_start_token_id=14,
-            forced_eos_token_id=14,
+            bos_token_id=self.bos_token_id,
+            eos_token_id=self.eos_token_id,
+            decoder_start_token_id=self.decoder_start_token_id,
+            forced_eos_token_id=self.forced_eos_token_id,
         )
         config.hidden_act = self.hidden_act
         config.layer_norm_eps = self.layer_norm_eps
