@@ -26,7 +26,9 @@ export seed=42
 export gradient_checkpointing=false
 export ddp_find_unused_parameters=false  # Longformer need find_unused_para to be true
 export max_steps=-1
-export log_base=2
+export num_train_epochs=6
+export num_train_epochs2=2
+export mapper='log(x,2)'
 export cls_len_disturb_rate=0.5
 
 export learning_rate=5e-4
@@ -42,5 +44,7 @@ export non_casual_layers=0
 export casual_layers=3
 
 export t5_mode=true
+
+export optim=adamw_torch  # adamw_torch | adafactor
 
 srun ./dist_run_x.sh

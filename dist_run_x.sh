@@ -21,7 +21,7 @@ model_required_params=(
   intermediate_size
   non_casual_layers
   casual_layers
-  log_base
+  mapper
   t5_mode
 )
 train_required_params=(
@@ -57,8 +57,9 @@ set -e
 ###### data path #######
 ########################
 CORPUS_PATH=${CORPUS_PATH:-"${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"}
-TRAIN_DATA_PATH="${CORPUS_PATH}/processed/trainL"
-EVAL_DATA_PATH="${CORPUS_PATH}/processed/devL"
+TRAIN_DATA_PATH_STAGE1="${CORPUS_PATH}/processed/train_stage1"
+TRAIN_DATA_PATH_STAGE2="${CORPUS_PATH}/processed/train_stage2"
+EVAL_DATA_PATH="${CORPUS_PATH}/processed/dev"
 VOCAB_PATH=${VOCAB_PATH:-"${CORPUS_PATH}/tokenizer/vocab.txt"}
 
 ########################
@@ -77,7 +78,7 @@ if [ ${casual_layers} -gt 0 ]; then
 fi
 
 # +log底数
-OUTPUT_DIR=${OUTPUT_DIR}_log${log_base:-2}
+OUTPUT_DIR=${OUTPUT_DIR}_log${mapper:'log(x,2)'}
 
 # +log_cross_attn
 if [ ${log_cross_attn} == false ]; then
@@ -113,14 +114,15 @@ main_x.py \
     --ddp_find_unused_parameters    ${ddp_find_unused_parameters:-false} \
     --ignore_data_skip              false \
     \
-    --trainDataPath                 ${TRAIN_DATA_PATH} \
+    --trainDataPath                 ${TRAIN_DATA_PATH_STAGE1} \
+    --trainDataPath2                ${TRAIN_DATA_PATH_STAGE2} \
     --evalDataPath                  ${EVAL_DATA_PATH} \
     --vocabPath                     ${VOCAB_PATH} \
     --logPath                       ${LOG_PATH} \
     --train_file_pattern            ${train_file_pattern:-'epoch-*.pretrain.data'} \
     --max_length                    ${max_length:-512} \
     --max_length2                   ${max_length2:-1024} \
-    --log_base                      ${log_base:-2} \
+    --mapper                        ${mapper:-'log(x,2)'} \
     --cls_len_disturb_rate          ${cls_len_disturb_rate:-0} \
     \
     --resume_checkpoint             ${resume_checkpoint:-none} \
@@ -143,7 +145,8 @@ main_x.py \
     --eval_accumulation_steps       ${eval_accumulation_steps} \
     --weight_decay                  ${weight_decay:-0.01} \
     --max_steps                     ${max_steps:-1000000} \
-    --num_train_epochs              ${num_train_epochs:-10} \
+    --num_train_epochs              ${num_train_epochs:-8} \
+    --num_train_epochs2             ${num_train_epochs2:-2} \
     --lr_scheduler_type             ${lr_scheduler_type:-linear} \
     --warmup_ratio                  ${warmup_ratio:-0.05} \
     --logging_dir                   ${TENSORBOARD_LOG_PATH} \

@@ -17,7 +17,7 @@ from typing import List, Tuple, TextIO, Union, Iterable
 
 import thulac
 
-from model import LogLMTokenizer
+from model import VCLSTokenizer
 from utils.logger import get_logger
 
 
@@ -53,7 +53,7 @@ class Preprocessor:
     def __init__(self, config_: Config, log_path: str = None):
         self.config = config_
         self.logger = get_logger(__name__, log_path)
-        self.tokenizer = LogLMTokenizer(vocab_file=self.config.vocabPath)
+        self.tokenizer = VCLSTokenizer(vocab_file=self.config.vocabPath)
         self.segmentor = thulac.thulac(user_dict=self.config.extraSegWordsFile, seg_only=True)
 
     @staticmethod

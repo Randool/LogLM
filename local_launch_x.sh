@@ -9,16 +9,18 @@ export SLURM_NNODES=1
 export SLURM_NODEID=0
 
 export nproc_per_node=1
-export per_device_train_batch_size=8
-export per_device_eval_batch_size=8
-export gradient_accumulation_steps=4
+export per_device_train_batch_size=32
+export per_device_eval_batch_size=32
+export gradient_accumulation_steps=1
 export eval_accumulation_steps=1
 
 export seed=42
 export gradient_checkpointing=false
 export ddp_find_unused_parameters=false  # Longformer need find_unused_para to be true
 export max_steps=-1
-export log_base=2
+export num_train_epochs=6
+export num_train_epochs2=2
+export mapper='log(x,2)'
 export cls_len_disturb_rate=0.5
 
 export learning_rate=5e-4
@@ -39,7 +41,6 @@ export logging_steps=200
 export save_steps=2000
 export eval_steps=2000
 
-export resume_checkpoint=$HOME/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_tiny_dec3_log2_mlogn/checkpoint-12000
-export optim=adafactor  # adamw_torch | adafactor
+export optim=adamw_torch  # adamw_torch | adafactor
 
 ./dist_run_x.sh

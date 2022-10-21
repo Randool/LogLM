@@ -8,14 +8,14 @@
 """
 import glob
 import json
+from dataclasses import dataclass, field
 from os.path import join, split
 from typing import Optional, List
 
 import torch
-from dataclasses import dataclass, field
 from transformers import TrainingArguments, HfArgumentParser, set_seed
 
-from model import LogLMTokenizer, LogLMNARConfig, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMNARConfig, LogLMForPreTraining
 from trainer import LogLMTrainer
 from utils import get_logger
 
@@ -23,6 +23,7 @@ from utils import get_logger
 @dataclass
 class DataArguments:
     trainDataPath: str = field(metadata={"help": "training data path"})
+    trainDataPath2: str = field(metadata={"help": "training data path for stage 2"})
     evalDataPath: str = field(metadata={"help": "evaluation data path"})
     vocabPath: str = field(metadata={"help": "vocabulary path"})
     num_examples_for_epoch: List[int] = field(default=None, metadata={"help": "Training example numbers of each epoch"})
@@ -30,10 +31,12 @@ class DataArguments:
     train_file_pattern: str = field(default="epoch-*.pretrain.data")
     dev_file_pattern: str = field(default="dev.data")
 
-    max_length: int = field(default=512)
-    max_length2: int = field(default=2048)
+    max_length: int = field(default=128)
+    max_length2: int = field(default=512)
 
-    log_base: float = field(default=2, metadata={"help": "Log base"})
+    num_train_epochs2: int = field(default=1, metadata={"help": "num_train_epochs for stage 2"})
+
+    mapper: str = field(default='log(x,2)', metadata={"help": "Log base"})
     anchored_length: int = field(default=-1, metadata={"help": "Anchor length"})
 
     cls_len_disturb_rate: float = field(default=0, metadata={"help": "CLS length variation range"})
@@ -41,6 +44,11 @@ class DataArguments:
     @property
     def train_data_files(self) -> List[str]:
         train_data_files = glob.glob(join(self.trainDataPath, self.train_file_pattern))
+        return sorted(train_data_files, key=lambda x: int(split(x)[-1].split(".")[0][6:].split("-")[0]))
+
+    @property
+    def train_data_files2(self) -> List[str]:
+        train_data_files = glob.glob(join(self.trainDataPath2, self.train_file_pattern))
         return sorted(train_data_files, key=lambda x: int(split(x)[-1].split(".")[0][6:].split("-")[0]))
 
     @property
@@ -147,7 +155,7 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer(dataArgs.vocabPath, log_base=dataArgs.log_base, return_token_type=True)
+    tokenizer = VCLSTokenizer(dataArgs.vocabPath, mapper=dataArgs.mapper, return_token_type=True)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
     config = LogLMNARConfig(

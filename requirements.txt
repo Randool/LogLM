@@ -1,8 +1,10 @@
 transformers==4.17.0
-tokenizers~=0.12.1
+tokenizers
 torch
-dataclasses~=0.8
-zhon~=1.1.5
+dataclasses
+zhon
 thulac
 datasets
 tqdm
+sympy
+sacrebleu

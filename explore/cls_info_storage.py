@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import DatasetForShuffledFile
-from model import LogLMTokenizer, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMForPreTraining
 
 
 def dict_to_device(inputs: dict, device):
@@ -47,7 +47,7 @@ def main():
     data_path = "/home/randool/Dataset/NLP/TencentMedicalPretrain/corpus/processed_mlm/dev/dev.data"
 
     model: LogLMForPreTraining = LogLMForPreTraining.from_pretrained(loglm_path).eval().to(device)
-    tokenizer: LogLMTokenizer = LogLMTokenizer.from_pretrained(loglm_path)
+    tokenizer: VCLSTokenizer = VCLSTokenizer.from_pretrained(loglm_path)
 
     devset = DatasetForShuffledFile(data_file=data_path, mask_token_id=tokenizer.mask_token_id,
                                     pad_token_id=tokenizer.pad_token_id, log_base=2)

@@ -23,10 +23,15 @@ export gradient_accumulation_steps=2
 export eval_accumulation_steps=1
 
 export seed=42
+export gradient_checkpointing=false
+export ddp_find_unused_parameters=false  # Longformer need find_unused_para to be true
 export max_steps=-1
+export num_train_epochs=6
+export num_train_epochs2=2
+export mapper='log(x,2)'
+export cls_len_disturb_rate=0.5
 
-export log_base=2
-export cls_len_disturb_rate=0.2
+export learning_rate=5e-4
 
 export model_type=loglm  # loglm | longloglm | bart
 export model_size=base
@@ -39,5 +44,7 @@ export non_casual_layers=0
 export casual_layers=6
 
 export t5_mode=true
+
+export optim=adamw_torch  # adamw_torch | adafactor
 
 srun ./dist_run_x.sh

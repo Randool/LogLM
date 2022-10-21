@@ -13,8 +13,8 @@ import torch
 from transformers import Seq2SeqTrainingArguments, HfArgumentParser, set_seed, BartConfig, BartForConditionalGeneration
 
 from main import DataArguments, ModelArguments
-from model import LogLMTokenizer, LogLMConfig, LogLMForConditionalGeneration
-from trainer_x import Seq2SeqTrainerPro
+from model import VCLSTokenizer, LogLMConfig, LogLMForConditionalGeneration
+from trainer import Seq2SeqTrainerPro
 from utils import get_logger
 
 
@@ -52,8 +52,8 @@ def main(_args: List[str] = None):
     set_seed(trainingArgs.seed)
 
     # ******************* Preparation ******************* #
-    tokenizer = LogLMTokenizer.from_pretrained(data_args.vocabPath, log_base=data_args.log_base,
-                                               anchored_length=data_args.anchored_length)
+    tokenizer = VCLSTokenizer.from_pretrained(data_args.vocabPath, mapper=data_args.mapper,
+                                              anchored_length=data_args.anchored_length)
     logger.info(f"[Tokenizer] {len(tokenizer)}")
 
     if "loglm" in model_args.model_type.lower():
@@ -84,7 +84,7 @@ def main(_args: List[str] = None):
             decoder_start_token_id=tokenizer.sep_token_id
         )
         model = BartForConditionalGeneration(config)
-        tokenizer.set_log_base_or_anchored_length(anchored_length=1)
+        tokenizer.update_mapper_or_anchored_length(anchored_length=1)
 
     else:
         raise ValueError(f"Unrecognized model_type: {model_args.model_type}")
@@ -104,19 +104,40 @@ def main(_args: List[str] = None):
         train_data_files=data_args.train_data_files,
         eval_data_file=data_args.eval_data_file,
         max_length=data_args.max_length,
-        max_length2=data_args.max_length2,
         use_cls_ids=("loglm" in model_args.model_type.lower()),
         t5_mode=model_args.t5_mode,
         cls_len_disturb_rate=data_args.cls_len_disturb_rate,
         logger=logger,
     )
 
-    # ******************* Train ******************* #
-    logger.info("***** START PRE-TRAINING *****")
+    logger.info("***** START TRAINING [STAGE1] *****")
     resume_checkpoint = model_args.resume_checkpoint
     if resume_checkpoint is None or resume_checkpoint.lower() == "none":
         resume_checkpoint = None
     trainer.train(resume_from_checkpoint=resume_checkpoint)
+
+    if data_args.trainDataPath2 is not None and data_args.trainDataPath2.lower() != "none":
+        best_checkpoint = trainer.state.best_model_checkpoint
+        logger.info(f"Use STAGE1 best checkpoint from {best_checkpoint}")
+
+        trainingArgs.ignore_data_skip = True
+        trainingArgs.num_train_epochs = data_args.num_train_epochs2
+
+        trainer = Seq2SeqTrainerPro(
+            args=trainingArgs,
+            model=model,
+            tokenizer=tokenizer,
+            train_data_files=data_args.train_data_files2,
+            eval_data_file=data_args.eval_data_file,
+            max_length=data_args.max_length2,
+            use_cls_ids=("loglm" in model_args.model_type.lower()),
+            t5_mode=model_args.t5_mode,
+            cls_len_disturb_rate=data_args.cls_len_disturb_rate,
+            logger=logger,
+        )
+
+        logger.info("***** START TRAINING [STAGE2] *****")
+        trainer.train(resume_from_checkpoint=best_checkpoint)
 
     logger.info("***** FINISHED *****")
 

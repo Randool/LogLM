@@ -11,7 +11,7 @@ from os.path import join, expanduser
 import torch
 from tqdm import tqdm
 
-from model import LogLMTokenizer, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMForPreTraining
 
 
 def calculate_acc_under_diff_len():
@@ -32,7 +32,7 @@ def calculate_acc_under_diff_len():
     lines.sort(key=lambda x: len(x))
 
     device = "cuda"
-    tokenizer = LogLMTokenizer.from_pretrained(ckpt_path)
+    tokenizer = VCLSTokenizer.from_pretrained(ckpt_path)
     model = LogLMForPreTraining.from_pretrained(ckpt_path).to(device).eval()
 
     for max_length in max_lengths:

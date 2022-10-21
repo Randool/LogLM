@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from dataset import DatasetWithIndex
 from debug import dict_to_device
-from model import LogLMForConditionalGeneration, LogLMTokenizer
+from model import LogLMForConditionalGeneration, VCLSTokenizer
 
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 HOME = expanduser("~")
@@ -41,7 +41,7 @@ def strip_special_tokens(sent: str) -> str:
 
 
 def main():
-    tokenizer: LogLMTokenizer = LogLMTokenizer.from_pretrained(model_path)
+    tokenizer: VCLSTokenizer = VCLSTokenizer.from_pretrained(model_path)
     model: LogLMForConditionalGeneration = LogLMForConditionalGeneration.from_pretrained(model_path).to(device)
 
     dataset = DatasetWithIndex(data_path, mask_token_id=tokenizer.mask_token_id,

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm import tqdm
 
-from model import LogLMTokenizer, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMForPreTraining
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -25,7 +25,7 @@ kenlm_model_path = "/home/randool/.pycorrector/datasets/zh_giga.no_cna_cmn.prune
 
 
 def main():
-    tokenizer = LogLMTokenizer.from_pretrained(ckpt_path)
+    tokenizer = VCLSTokenizer.from_pretrained(ckpt_path)
     model = LogLMForPreTraining.from_pretrained(ckpt_path).to(device).eval()
     assert model.non_casual_decoder is not None
     model.casual_decoder = None

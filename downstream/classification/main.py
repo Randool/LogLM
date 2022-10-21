@@ -20,7 +20,7 @@ from transformers import set_seed, BertLayer, BertTokenizer, BertForSequenceClas
 from transformers.models.bert.modeling_bert import BertEmbeddings
 
 from downstream.classification.dataset import SentClassificationDataset, CollateFn, task_id2label
-from model import LogLMForSequenceClassification, LogLMTokenizer
+from model import LogLMForSequenceClassification, VCLSTokenizer
 from plm import ChPTMTokenizer, PlmForSequenceClassification
 from downstream.utils.args import ModelConstructArgs, ClassifyDataArgs
 from utils.callback import LoggerCallback
@@ -35,11 +35,11 @@ def get_model_with_tokenizer(model_args: ModelConstructArgs, task_name: str):
     MODEL_TOKENIZER = {
         "plm": (PlmForSequenceClassification, ChPTMTokenizer),
         "bert": (BertForSequenceClassification, BertTokenizer),
-        "loglm": (LogLMForSequenceClassification, LogLMTokenizer),
+        "loglm": (LogLMForSequenceClassification, VCLSTokenizer),
     }
     _M, _T = MODEL_TOKENIZER[model_args.model_type]
 
-    if _T == LogLMTokenizer:
+    if _T == VCLSTokenizer:
         tokenizer = _T.from_pretrained(model_args.model_path, do_lower_case=True,
                                        anchored_length=model_args.anchored_cls_length)
         model = _M.from_pretrained(model_args.model_path, num_labels=len(task_id2label[task_name]),

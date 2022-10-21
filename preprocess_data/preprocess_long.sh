@@ -14,15 +14,17 @@ DATA_PATH="${HOME}/Dataset/NLP/TencentMedicalPretrain/corpus"
 NORMALIZED_TRAIN="${DATA_PATH}/normalized/train"
 NORMALIZED_DEV="${DATA_PATH}/normalized/dev"
 
-PROCESSED_TRAIN="${DATA_PATH}/processed/trainL"
-PROCESSED_DEV="${DATA_PATH}/processed/devL"
+PROCESSED_TRAIN_STAGE1="${DATA_PATH}/processed/train_stage1"
+PROCESSED_TRAIN_STAGE2="${DATA_PATH}/processed/train_stage2"
+PROCESSED_DEV="${DATA_PATH}/processed/dev"
 
 MAX_SEQ_LEN=${MAX_SEQ_LEN:-128}
 MAX_PRED_PER_SEQ=${MAX_PRED_PER_SEQ:-16}
 MAX_SEQ_LEN2=${MAX_SEQ_LEN2:-512}
 MAX_PRED_PER_SEQ2=${MAX_PRED_PER_SEQ2:-64}
 maskRatio=${maskRatio:-0.15}
-EPOCH=${EPOCH:-4}
+EPOCH_STAGE1=${EPOCH:-4}
+EPOCH_STAGE2=${EPOCH:-1}
 SEED=${SEED:-42}
 
 MERGE='true' # true | false
@@ -31,6 +33,8 @@ RELEASE_CACHE='true' # true | false
 VOCAB_PATH="${HOME}/Projects/LogLM/preprocess_data/tokenizer/vocab.txt"
 
 set -x
+
+##### STAGE1 #####
 
 PYTHONPATH=.. \
 python preprocess.py \
@@ -42,27 +46,63 @@ python preprocess.py \
     --maxSeqLen2        ${MAX_SEQ_LEN2} \
     --maxPredPerSeq2    ${MAX_PRED_PER_SEQ2} \
     \
-    --dupEpochNum       ${EPOCH} \
+    --dupEpochNum       ${EPOCH_STAGE1} \
     --verboseStep       5000 \
     --vocabPath         ${VOCAB_PATH} \
     --WWM \
     --input_path        ${NORMALIZED_TRAIN} \
-    --output_path       ${PROCESSED_TRAIN} \
+    --output_path       ${PROCESSED_TRAIN_STAGE1} \
     --processNum        ${processNum:-50} \
     --maskRatio         ${maskRatio} \
     --logPath           "${DATA_PATH}/logs" \
     --seed              ${SEED}
 
-
 # merge data
 if [[ ${MERGE} == 'true' ]]; then
-    for epoch in $(ls ${PROCESSED_TRAIN}); do
-        EPOCH_PATH="${PROCESSED_TRAIN}/${epoch}"
+    for epoch in $(ls ${PROCESSED_TRAIN_STAGE1}); do
+        EPOCH_PATH="${PROCESSED_TRAIN_STAGE1}/${epoch}"
 
         if [[ -d ${EPOCH_PATH} ]]; then
             echo "merging data in: ${EPOCH_PATH}"
-            length=$(echo ${epoch} | grep -Eo "L[0-9]+")
-            cat ${EPOCH_PATH}/* > "${EPOCH_PATH}.${length}.pretrain.data"
+            cat ${EPOCH_PATH}/* > "${EPOCH_PATH}.pretrain.data"
+            if [[ ${RELEASE_CACHE} == 'true' ]]; then
+                rm -rf ${EPOCH_PATH}
+            fi
+        fi
+    done
+fi
+
+##### STAGE2 #####
+
+PYTHONPATH=.. \
+python preprocess.py \
+    --type              ${TYPE} \
+    \
+    --maxSeqLen         ${MAX_SEQ_LEN} \
+    --maxPredPerSeq     ${MAX_PRED_PER_SEQ} \
+    \
+    --maxSeqLen2        ${MAX_SEQ_LEN2} \
+    --maxPredPerSeq2    ${MAX_PRED_PER_SEQ2} \
+    \
+    --dupEpochNum       ${EPOCH_STAGE2} \
+    --verboseStep       5000 \
+    --vocabPath         ${VOCAB_PATH} \
+    --WWM \
+    --input_path        ${NORMALIZED_TRAIN} \
+    --output_path       ${PROCESSED_TRAIN_STAGE2} \
+    --processNum        ${processNum:-50} \
+    --maskRatio         ${maskRatio} \
+    --logPath           "${DATA_PATH}/logs" \
+    --seed              ${SEED}
+
+# merge data
+if [[ ${MERGE} == 'true' ]]; then
+    for epoch in $(ls ${PROCESSED_TRAIN_STAGE2}); do
+        EPOCH_PATH="${PROCESSED_TRAIN_STAGE2}/${epoch}"
+
+        if [[ -d ${EPOCH_PATH} ]]; then
+            echo "merging data in: ${EPOCH_PATH}"
+            cat ${EPOCH_PATH}/* > "${EPOCH_PATH}.pretrain.data"
             if [[ ${RELEASE_CACHE} == 'true' ]]; then
                 rm -rf ${EPOCH_PATH}
             fi

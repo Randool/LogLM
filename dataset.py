@@ -14,7 +14,7 @@ from typing import List, Optional
 import torch
 from torch.utils.data import IterableDataset, Dataset
 
-from model.tokenizer import LogTruncation, LogLMTokenizer
+from model.tokenizer import Truncator, VCLSTokenizer
 
 Item = namedtuple("Items", ("input_ids", "token_type_ids", "cls_type_ids", "labels", "SO_label"))
 
@@ -63,7 +63,7 @@ def trim_ids(ids: List[Optional[int]], target_len: int, has_bos: bool, has_eos: 
     return [x for x in ids if x is not None]
 
 
-def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: int, max_length: int = None,
+def legacy_parse_example(line: str, truncator: Truncator, mask_token_id: int, max_length: int = None,
                          nar_mode: bool = True) -> Item:
     warnings.warn("`legacy_parse_example` is deprecated", DeprecationWarning)
 
@@ -78,9 +78,9 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     for pos in masked_pos:
         token_ids[pos] = -token_ids[pos]
 
-    cls_len, len_ids, len_pair_ids = truncation.truncated_length(token_type_lengths[0] - (not nar_mode),
-                                                                 token_type_lengths[1],
-                                                                 max_length)
+    cls_len, len_ids, len_pair_ids = truncator.truncated_length(token_type_lengths[0] - (not nar_mode),
+                                                                token_type_lengths[1],
+                                                                max_length)
 
     cls_ids = [i for i in range(1, cls_len + 1)]
     if nar_mode:
@@ -106,13 +106,13 @@ def legacy_parse_example(line: str, truncation: LogTruncation, mask_token_id: in
     )
 
 
-def parse_example(line: str, tokenizer: LogLMTokenizer, max_length: int = None,
+def parse_example(line: str, tokenizer: VCLSTokenizer, max_length: int = None,
                   cls_len_disturb_rate: float = 0.0) -> Item:
     """
     Parse example of T5-task format: `a b c d e f g|A-B C D-E`
 
     :param line: Example line.
-    :param tokenizer:       LogLMTokenizer.
+    :param tokenizer:       VCLSTokenizer.
     :param max_length:      Max sequence length.
     :param cls_len_disturb_rate: If not 0, the length of CLS will increase or decrease randomly by this rate.
     """
@@ -148,13 +148,13 @@ def parse_example(line: str, tokenizer: LogLMTokenizer, max_length: int = None,
     )
 
 
-def parse_example_t5(line: str, tokenizer: LogLMTokenizer, max_length: int = None,
+def parse_example_t5(line: str, tokenizer: VCLSTokenizer, max_length: int = None,
                      cls_len_disturb_rate: float = 0.0) -> Item:
     """
     Parse example of T5-task format: `a b c d e f g|A-B C D-E`
 
     :param line: Example line.
-    :param tokenizer:       LogLMTokenizer.
+    :param tokenizer:       VCLSTokenizer.
     :param max_length:      Max sequence length.
     :param cls_len_disturb_rate: If not 0, the length of CLS will increase or decrease randomly by this rate.
     """
@@ -266,13 +266,13 @@ class CollateFn:
 
 
 class DatasetForShuffledFile(IterableDataset):
-    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, num_examples: int = None, log_base=2,
-                 nar_mode=True, return_cls_ids=True):
+    def __init__(self, data_file: str, mask_token_id: int, pad_token_id: int, num_examples: int = None,
+                 mapper: str = None, anchored_length: int = -1, nar_mode=True, return_cls_ids=True):
         self.data_file = data_file
         self.num_examples = num_examples
         self.nar_mode = nar_mode
 
-        self._trunc = LogTruncation(log_base=log_base)
+        self._trunc = Truncator(mapper, anchored_length)
         self.collate_fn = CollateFn(mask_token_id, pad_token_id, nar_mode, return_cls_ids)
 
     def __iter__(self):
@@ -294,8 +294,9 @@ class DatasetForShuffledFile(IterableDataset):
 
 
 class DatasetWithIndex(Dataset):
-    def __init__(self, data_file: str, tokenizer: LogLMTokenizer, max_length: int, log_base: int = None, nar_mode=False,
-                 t5_mode=False, return_cls_ids=True, cls_len_disturb_rate=0.0, index_suffix: str = ".index"):
+    def __init__(self, data_file: str, tokenizer: VCLSTokenizer, max_length: int, mapper: str = None,
+                 anchored_length: int = -1, nar_mode=False, t5_mode=False, return_cls_ids=True,
+                 cls_len_disturb_rate=0.0, index_suffix: str = ".index"):
         self.data_file = data_file
         self.indexes = self.parse_index(data_file + index_suffix)
 
@@ -305,7 +306,7 @@ class DatasetWithIndex(Dataset):
         self.cls_len_disturb_rate = cls_len_disturb_rate
 
         self.tokenizer = tokenizer
-        self.tokenizer.set_log_base_or_anchored_length(log_base=log_base)
+        self.tokenizer.update_mapper_or_anchored_length(mapper, anchored_length)
 
         if t5_mode and tokenizer.additional_special_tokens_ids is None:
             raise ValueError("`t5_mask_token_ids` should be given under T5-mode")

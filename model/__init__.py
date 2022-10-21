@@ -1,4 +1,4 @@
-from .tokenizer import LogLMTokenizer
+from .tokenizer import VCLSTokenizer
 
 from .nar_config import LogLMNARConfig
 from .nar_model import LogLMForPreTraining, LogLMForSequenceClassification

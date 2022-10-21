@@ -13,7 +13,7 @@ import torch
 from tqdm import tqdm
 from transformers import BertModel, BertTokenizer
 
-from model import LogLMTokenizer, LogLMForConditionalGeneration
+from model import VCLSTokenizer, LogLMForConditionalGeneration
 from wmd import WMD
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -22,7 +22,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 def load_tokenizer_and_model(model_type: str):
     if model_type == "loglm":
         model_path = "/home/randool/Dataset/NLP/TencentMedicalPretrain/corpus/ckpts/loglm_base_dec6_log2/checkpoint-500000"
-        tokenizer: LogLMTokenizer = LogLMTokenizer.from_pretrained(model_path)
+        tokenizer: VCLSTokenizer = VCLSTokenizer.from_pretrained(model_path)
         model: LogLMForConditionalGeneration = LogLMForConditionalGeneration.from_pretrained(model_path).eval().to(
             device)
 

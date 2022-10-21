@@ -9,68 +9,70 @@
 import json
 import os
 from contextlib import contextmanager
+from functools import lru_cache
 from itertools import chain
-from math import ceil, log, floor
+from math import ceil, floor
 from typing import Optional, List, Union, Dict, Tuple
 
+import sympy
 from transformers import BertTokenizer
 from transformers.file_utils import PaddingStrategy, TensorType
 from transformers.tokenization_utils_base import TruncationStrategy, BatchEncoding, EncodedInput, TOKENIZER_CONFIG_FILE
 
+DEFAULT_MAPPER = 'log(x,2)'
 
-class LogTruncation:
-    """ Find optimal truncated length using Newton's Iteration """
 
-    def __init__(self, log_base: float, anchored_length: int = -1):
-        self._log_base = log_base
-        self._ln_base_inverse = 1 / log(log_base)
-        self._anchored_length = anchored_length
+class Truncator:
+    mapper: sympy.Expr
+    _dy: sympy.Expr
+    _x: sympy.Symbol
+    anchored_length: int
 
-    def set_log_base_or_anchored_length(self, log_base: float = None, anchored_length: int = None):
-        if log_base is not None:
-            self._log_base = log_base
-            self._ln_base_inverse = 1 / log(log_base)
+    def __init__(self, mapper: str = None, anchored_length: int = -1):
+        mapper = DEFAULT_MAPPER if mapper is None else mapper
+        self.update_mapper_or_anchored_length(mapper, anchored_length)
+
+    def update_mapper_or_anchored_length(self, mapper: str = None, anchored_length: int = None):
+        if mapper is not None:
+            mapper = sympy.parse_expr(mapper)
+
+            assert len(mapper.free_symbols) == 1, \
+                f'`mapper` must contain only one free symbol, got: {mapper.free_symbols}'
+
+            self._x: sympy.Symbol = list(mapper.free_symbols)[0]
+            self.mapper = mapper
+            self._dy = sympy.diff(self.mapper + self._x)
 
         if anchored_length is not None:
-            self._anchored_length = anchored_length
-
-    @property
-    def log_base(self):
-        return self._log_base
-
-    @property
-    def anchored_length(self):
-        return self._anchored_length
-
-    def _f(self, x: float, max_length: int) -> float:
-        return x + log(x, self._log_base) - max_length
-
-    def _f_derivative(self, x: float) -> float:
-        return 1 + self._ln_base_inverse / x
+            self.anchored_length = anchored_length
 
     def get_cls_len(self, len_ids: float, len_pair_ids: float = 0) -> int:
-        return ceil(log(max(1.5, len_ids + len_pair_ids), self._log_base))
+        return ceil(self.mapper.evalf(subs={self._x.name: len_ids + len_pair_ids}))
 
-    def truncated_length(
-            self, len_ids: int, len_pair_ids: int = None, max_length: int = None
-    ) -> Tuple[int, int, int]:
+    @lru_cache(maxsize=128)
+    def truncated_length(self, len_ids: int, len_pair_ids: int = 0, max_length: int = 100000) -> Tuple[int, int, int]:
         """ :returns: cls_len, len_ids, len_pair_ids """
-        len_pair_ids = 0 if len_pair_ids is None else len_pair_ids
         rest = len_ids + len_pair_ids
 
-        if self._anchored_length == -1:
+        if self.anchored_length == -1:
             cls_len = self.get_cls_len(len_ids, len_pair_ids)
 
-            if not (max_length is None or cls_len + len_ids + len_pair_ids <= max_length):
-                x = len_ids + len_pair_ids
-                x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
-                x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
-                x = max(1.0, x - self._f(x, max_length) / self._f_derivative(x))
+            if not (cls_len + len_ids + len_pair_ids <= max_length):
+                f = self._x + self.mapper - max_length
+                x_ = len_ids + len_pair_ids
+                subs = {self._x.name: x_}
 
-                cls_len = self.get_cls_len(x, 0)
+                for _ in range(3):
+                    subs[self._x.name] = x_
+                    f_ = float(f.evalf(subs=subs))
+                    df_ = float(self._dy.evalf(subs=subs))
+                    x_ = x_ - f_ / df_
+
+                cls_len = self.get_cls_len(x_, 0)
                 rest = max_length - cls_len
+
         else:
-            cls_len = self._anchored_length
+            cls_len = self.anchored_length
             if max_length:
                 rest = max_length - cls_len
 
@@ -91,7 +93,7 @@ class LogTruncation:
         return cls_len, len_ids, len_pair_ids
 
 
-class LogLMTokenizer(BertTokenizer):
+class VCLSTokenizer(BertTokenizer):
     model_input_names: List[str] = ["input_ids", "attention_mask", "cls_type_ids"]
 
     def __init__(
@@ -107,7 +109,7 @@ class LogLMTokenizer(BertTokenizer):
             mask_token="[MASK]",
             tokenize_chinese_chars=True,
             strip_accents=None,
-            log_base=2,
+            mapper: str = DEFAULT_MAPPER,
             anchored_length: int = -1,
             return_token_type=False,
             extra_ids=100,
@@ -140,23 +142,17 @@ class LogLMTokenizer(BertTokenizer):
         if return_token_type:
             self.model_input_names.append("token_type_ids")
 
-        self.log_truncation = LogTruncation(log_base, anchored_length)
+        self.truncator = Truncator(mapper, anchored_length)
 
-    def set_log_base_or_anchored_length(self, log_base: float = None, anchored_length: int = None):
-        self.log_truncation.set_log_base_or_anchored_length(log_base, anchored_length)
-
-    @property
-    def log_base(self):
-        return self.log_truncation.log_base
+    def update_mapper_or_anchored_length(self, mapper: sympy.Expr = None, anchored_length: int = None):
+        self.truncator.update_mapper_or_anchored_length(mapper, anchored_length)
 
     @property
     def anchored_length(self):
-        return self.log_truncation.anchored_length
+        return self.truncator.anchored_length
 
-    def truncated_length(
-            self, len_ids: int, len_pair_ids: int = None, max_length: int = None
-    ) -> Tuple[int, int, int]:
-        return self.log_truncation.truncated_length(len_ids, len_pair_ids, max_length)
+    def truncated_length(self, len_ids: int, len_pair_ids: int = 0, max_length: int = 100000) -> Tuple[int, int, int]:
+        return self.truncator.truncated_length(len_ids, len_pair_ids, max_length)
 
     def _pad(
             self,
@@ -249,9 +245,9 @@ class LogLMTokenizer(BertTokenizer):
         encoded_inputs = {}
 
         # Compute the total size of the returned encodings
-        cls_len, _, _ = self.log_truncation.truncated_length(len_ids + 1,
-                                                             len_pair_ids + 1 if len_pair_ids > 0 else 0,
-                                                             max_length)
+        cls_len, _, _ = self.truncator.truncated_length(len_ids + 1,
+                                                        len_pair_ids + 1 if len_pair_ids > 0 else 0,
+                                                        max_length)
         total_len = cls_len + len_ids + len_pair_ids
 
         # Truncation: Handle max sequence length
@@ -315,8 +311,7 @@ class LogLMTokenizer(BertTokenizer):
     def build_inputs_with_special_tokens(
             self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
     ) -> List[int]:
-        cls_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
-                                                             len(token_ids_1) + 1 if token_ids_1 else 0)
+        cls_len, *_ = self.truncator.truncated_length(len(token_ids_0) + 1, len(token_ids_1) + 1 if token_ids_1 else 0)
         sep = [self.sep_token_id]
 
         if token_ids_1 is None:
@@ -337,8 +332,7 @@ class LogLMTokenizer(BertTokenizer):
                 setattr(self, "special_tokens_ids", sp_ids)
             return [1 if _id in sp_ids else 0 for _id in chain(token_ids_0, [] if token_ids_1 is None else token_ids_1)]
 
-        cls_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
-                                                             len(token_ids_1) + 1 if token_ids_1 else 0)
+        cls_len, *_ = self.truncator.truncated_length(len(token_ids_0) + 1, len(token_ids_1) + 1 if token_ids_1 else 0)
 
         if token_ids_1 is not None:
             return [1] * cls_len + ([0] * len(token_ids_0)) + [1] + ([0] * len(token_ids_1)) + [1]
@@ -348,8 +342,7 @@ class LogLMTokenizer(BertTokenizer):
     def create_token_type_ids_from_sequences(
             self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
     ) -> List[int]:
-        cls_len, _, _ = self.log_truncation.truncated_length(len(token_ids_0) + 1,
-                                                             len(token_ids_1) + 1 if token_ids_1 else 0)
+        cls_len, *_ = self.truncator.truncated_length(len(token_ids_0) + 1, len(token_ids_1) + 1 if token_ids_1 else 0)
 
         if token_ids_1 is None:
             return [0] * (cls_len + len(token_ids_0) + 1)
@@ -374,7 +367,7 @@ class LogLMTokenizer(BertTokenizer):
         # Add `log_base` & `anchored_length` to `tokenizer_config.json`
         with open(os.path.join(save_directory, TOKENIZER_CONFIG_FILE), "r+", encoding="utf8") as f:
             config = json.load(f)
-            config["log_base"] = self.log_base
+            config["mapper"] = str(self.truncator.mapper)
             config["anchored_length"] = self.anchored_length
             config["return_token_type"] = self.return_token_type
             f.seek(0)
@@ -385,6 +378,6 @@ class LogLMTokenizer(BertTokenizer):
     @contextmanager
     def as_target_tokenizer(self):
         anchored_length = self.anchored_length
-        self.set_log_base_or_anchored_length(anchored_length=1)
+        self.update_mapper_or_anchored_length(anchored_length=1)
         yield
-        self.set_log_base_or_anchored_length(anchored_length=anchored_length)
+        self.update_mapper_or_anchored_length(anchored_length=anchored_length)

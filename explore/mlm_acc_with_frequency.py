@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import DatasetForShuffledFile
-from model import LogLMTokenizer, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMForPreTraining
 
 
 def dict_to_device(inputs: dict, device):
@@ -37,7 +37,7 @@ def pred_acc_on_different_freq():
     model_path = join(corpus_path, f"ckpts/{model_cfg}/checkpoint-950000")
     corpus = join(corpus_path, "processed/dev/dev.data")
 
-    tokenizer = LogLMTokenizer.from_pretrained(model_path)
+    tokenizer = VCLSTokenizer.from_pretrained(model_path)
     model = LogLMForPreTraining.from_pretrained(model_path).to(device).eval()
     assert model.non_casual_decoder is not None
     model.casual_decoder = None

@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataset import DatasetForShuffledFile
-from model import LogLMTokenizer, LogLMForPreTraining
+from model import VCLSTokenizer, LogLMForPreTraining
 from plm import PlmForPreTraining, ChPTMTokenizer
 
 
@@ -29,12 +29,12 @@ def calculate_mlm_acc_on_dev():
 
     if is_loglm:
         model = LogLMForPreTraining.from_pretrained(loglm_path).eval().to(device)
-        log_tokenizer = tokenizer = LogLMTokenizer.from_pretrained(loglm_path)
+        log_tokenizer = tokenizer = VCLSTokenizer.from_pretrained(loglm_path)
     else:
         model_path = "/home/randool/Dataset/transformers/our-macbert-base-1000000"
         model = PlmForPreTraining.from_pretrained(model_path).eval().to(device)
         tokenizer = ChPTMTokenizer.from_pretrained(model_path)
-        log_tokenizer = LogLMTokenizer.from_pretrained(loglm_path)
+        log_tokenizer = VCLSTokenizer.from_pretrained(loglm_path)
 
     devset = DatasetForShuffledFile(data_file="/home/randool/tmp/dev.data", mask_token_id=log_tokenizer.mask_token_id,
                                     pad_token_id=log_tokenizer.pad_token_id, log_base=1024)
